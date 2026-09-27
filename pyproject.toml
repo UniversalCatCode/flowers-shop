@@ -1,0 +1,85 @@
+[project]
+name = "flowers-shop"
+version = "0.1.0"
+description = "Цветочный магазин - система управления"
+requires-python = ">=3.11"
+dependencies = [
+    # Web framework
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    
+    # Database
+    "sqlalchemy[asyncio]>=2.0.25",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.1",
+    
+    # Validation & Settings
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.1.0",
+    "email-validator>=2.0.0",
+    
+    # Cache
+    "redis>=5.0.0",
+    
+    # Security
+    "python-jose[cryptography]>=3.3.0",
+    "bcrypt==4.0.1",
+    "python-multipart>=0.0.6",
+    
+    # HTTP client (для интеграций)
+    "httpx>=0.27.0",
+
+    # Telegram Bot
+    "aiogram>=3.0.0",
+    
+    # Utilities
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    
+    # Code quality
+    "black>=24.0.0",
+    "ruff>=0.2.0",
+    "mypy>=1.8.0",
+    
+    # Development tools
+    "ipython>=8.20.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+

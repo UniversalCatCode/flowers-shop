@@ -1,0 +1,81 @@
+services:
+  # === REVERSE PROXY & SSL ===
+  nginx:
+    image: nginx:alpine
+    container_name: flowers_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./uploads:/app/uploads:ro # Чтобы Nginx мог отдавать статику (фото) напрямую, минуя Python (опционально, но быстрее)
+    depends_on:
+      - api
+      - frontend
+    restart: unless-stopped
+
+  api:
+    build: .
+    container_name: flowers_api
+    # Убрали ports: 8000 наружу, теперь доступен только внутри Docker сети
+    environment:
+      - APP_NAME=${APP_NAME}
+      - APP_VERSION=${APP_VERSION}
+      - DEBUG=False # ВАЖНО для продакшена!
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - JWT_ALGORITHM=${JWT_ALGORITHM}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}
+      - BOT_TOKEN=${BOT_TOKEN}
+      - BOT_USERNAME=${BOT_USERNAME}
+      - BOT_PASSWORD=${BOT_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./app:/app/app
+      - ./migrations:/app/migrations
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: flowers_frontend
+    # Убрали ports: 3000 наружу
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    container_name: flowers_db
+    environment:
+      - POSTGRES_USER=${DB_USER:-flowers_user} # Лучше брать из .env
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-password} # Смени 'password' в .env на сложный пароль!
+      - POSTGRES_DB=${DB_NAME:-flowers}
+    # УБРАЛИ ports: 5432 наружу! Теперь только внутри сети
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-flowers_user} -d ${DB_NAME:-flowers}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: flowers_redis
+    # УБРАЛИ ports: 6379 наружу!
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
