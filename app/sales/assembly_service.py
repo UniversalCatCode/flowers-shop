@@ -7,8 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app.sales.models import Sale, SaleItem
 from app.catalog.models import Product, Recipe, RecipeItem
-from app.inventory.models import Batch, Movement, PackagingOpening, PackagingConsumption, WriteOff, Stock
-from app.inventory.packaging_service import PackagingService
+from app.inventory.models import Batch, Movement, WriteOff, Stock
 
 
 class OrderAssemblyService:
@@ -91,7 +90,7 @@ class OrderAssemblyService:
             
             if product.product_type == 'bouquet' and item.recipe:
                 for recipe_item in item.recipe.items:
-                    components_to_check.append((recipe_item.product, recipe_item.quantity))
+                    components_to_check.append((recipe_item.product, recipe_item.quantity * item.quantity))
             else:
                 components_to_check.append((product, item.quantity))
 
@@ -122,50 +121,19 @@ class OrderAssemblyService:
                         })
                 
                 elif comp_product.product_type == 'packaging':
-                    # Проверяем наличие активного рулона
-                    from app.inventory.models import PackagingUnit, PackagingOpening
-                    stmt_opening = (
-                        select(PackagingOpening)
-                        .join(PackagingUnit, PackagingOpening.packaging_unit_id == PackagingUnit.id)
-                        .where(
-                            PackagingOpening.status == 'active',
-                            PackagingUnit.product_id == comp_product.id
-                        )
+                    # Проверяем остаток в Stock (как для consumable)
+                    stock = await db.scalar(
+                        select(Stock).where(Stock.product_id == comp_product.id)
                     )
-                    opening_result = await db.execute(stmt_opening)
-                    active_opening = opening_result.scalar_one_or_none()
+                    available_qty = stock.quantity if stock else 0
                     
-                    if not active_opening:
-                        # Ищем рулоны на складе (не в обороте)
-                        stmt_units = (
-                            select(PackagingUnit)
-                            .outerjoin(
-                                PackagingOpening,
-                                (PackagingUnit.id == PackagingOpening.packaging_unit_id) &
-                                (PackagingOpening.status == 'active')
-                            )
-                            .where(
-                                PackagingUnit.product_id == comp_product.id,
-                                PackagingOpening.id == None
-                            )
-                        )
-                        units_result = await db.execute(stmt_units)
-                        available_units = units_result.scalars().all()
-                        
+                    if available_qty < required_qty:
                         packaging_shortages.append({
                             'product_id': comp_product.id,
                             'product_name': comp_product.name,
                             'required_qty': float(required_qty),
-                            'available_openings': 0,
-                            'available_units_on_stock': [
-                                {
-                                    'id': u.id,
-                                    'unit_name': u.unit_name,
-                                    'base_quantity': float(u.base_quantity),
-                                    'base_unit': u.base_unit
-                                }
-                                for u in available_units
-                            ]
+                            'available_qty': float(available_qty),
+                            'shortage_qty': float(required_qty - available_qty)
                         })
                 
                 elif comp_product.product_type == 'consumable':
@@ -244,25 +212,38 @@ class OrderAssemblyService:
             if product.product_type == 'bouquet' and item.recipe:
                 # Если это букет с рецептом, берем компоненты рецепта
                 for recipe_item in item.recipe.items:
-                    components_to_process.append((recipe_item.product, recipe_item.quantity))
+                    components_to_process.append((recipe_item.product, recipe_item.quantity * item.quantity))
             else:
                 # Если это обычный товар (или букет без рецепта в этой позиции), списываем его самого
                 components_to_process.append((product, item.quantity))
 
             # 3. Списание компонентов
+            packaging_warnings = []  # Собираем предупреждения о норме
             for comp_product, comp_qty in components_to_process:
-                if comp_product.product_type == 'flower':
-                    await OrderAssemblyService._deduct_flower_fifo(
-                        db, comp_product.id, comp_qty, sale.id, item.id, user_id
-                    )
-                elif comp_product.product_type == 'packaging':
-                    await OrderAssemblyService._record_packaging_consumption(
-                        db, comp_product.id, comp_qty, sale.id, user_id
-                    )
-                elif comp_product.product_type == 'consumable':
-                    await OrderAssemblyService._deduct_consumable(
-                        db, comp_product.id, comp_qty, sale.id, user_id
-                    )
+                try:
+                    if comp_product.product_type == 'flower':
+                        await OrderAssemblyService._deduct_flower_fifo(
+                            db, comp_product.id, comp_qty, sale.id, item.id, user_id
+                        )
+                    elif comp_product.product_type == 'packaging':
+                        result = await OrderAssemblyService._deduct_packaging(
+                            db, comp_product.id, comp_qty, sale.id, user_id
+                        )
+                        if result and result.get("norm_reached"):
+                            packaging_warnings.append(result)
+                    elif comp_product.product_type == 'consumable':
+                        await OrderAssemblyService._deduct_consumable(
+                            db, comp_product.id, comp_qty, sale.id, user_id
+                        )
+                except ValueError as e:
+                    error_msg = str(e)
+                    # Специальные ошибки упаковки — пробрасываем как есть для UI
+                    if error_msg.startswith('PACKAGING_'):
+                        await db.rollback()
+                        raise
+                    # Остальные ошибки тоже пробрасываем
+                    await db.rollback()
+                    raise
 
         # 4. Обновляем статус заказа
         sale.status = 'assembled'
@@ -274,6 +255,15 @@ class OrderAssemblyService:
 
         await db.commit()
         await db.refresh(sale)
+        
+        # Если были предупреждения о норме упаковки — добавляем в ответ
+        if packaging_warnings:
+            # Возвращаем специальный объект вместо Sale
+            raise ValueError(
+                f"PACKAGING_NORM_REACHED|{packaging_warnings[0]['opening_id']}|"
+                f"Нормативный расход достигнут. Подтвердите закрытие рулона."
+            )
+        
         return sale
 
 
@@ -359,77 +349,33 @@ class OrderAssemblyService:
 
 
     @staticmethod
-    async def _record_packaging_consumption(
-        db: AsyncSession,
-        product_id: int,
-        qty_to_deduct: Decimal,
-        sale_id: int,
-        user_id: int
-    ):
-        """Записывает нормативный расход упаковки и СПИСЫВАЕТ со склада"""
-        from app.inventory.models import PackagingUnit, PackagingConsumption, Stock
-        from app.stores.alert_service import AlertService
-        from app.inventory.packaging_service import PackagingService
+    async def _deduct_packaging(db: AsyncSession, product_id: int, qty: float, sale_id: int, user_id: int):
+        """Списание упаковки — простая логика как у consumable"""
+        from decimal import Decimal
         
-        # 1. СПИСЫВАЕМ со сводного остатка (Stock)
+        qty_to_deduct = Decimal(str(qty))
+        
         stock = await db.scalar(
-            select(Stock)
-            .where(Stock.product_id == product_id)
-            .with_for_update()  # Блокируем строку от гонок данных
+            select(Stock).where(Stock.product_id == product_id).with_for_update()
         )
         
-        if stock:
-            # Примечание: qty_to_deduct здесь должен быть в тех же единицах, что и base_quantity в Stock
-            # (например, если в Stock лежат метры, то и qty_to_deduct должен быть в метрах)
-            stock.quantity -= qty_to_deduct
-            stock.updated_at = datetime.utcnow()
-        else:
-            # Если записи в Stock вдруг нет, создаём с отрицательным значением (как защита от сбоев)
-            new_stock = Stock(product_id=product_id, quantity=-qty_to_deduct)
-            db.add(new_stock)
-
-        # 2. Ищем активное открытие рулона для этого товара
-        stmt = (
-            select(PackagingOpening)
-            .join(PackagingUnit, PackagingOpening.packaging_unit_id == PackagingUnit.id)
-            .where(
-                PackagingOpening.status == 'active',
-                PackagingUnit.product_id == product_id
-            )
-            .order_by(PackagingOpening.opened_at.asc())
-        )
+        if not stock or stock.quantity < qty_to_deduct:
+            available = float(stock.quantity) if stock else 0
+            raise ValueError(f"Недостаточно остатков упаковки (ID {product_id}): нужно {qty}, доступно {available}")
         
-        result = await db.execute(stmt)
-        active_opening = result.scalar_one_or_none()
-
-        if not active_opening:
-            # Если нет открытого рулона, создаём алерт (теперь он хотя бы будет единственным)
-            await AlertService.create_alert(
-                db=db,
-                alert_type='packaging_shortage',
-                product_id=product_id,
-                required_qty=float(qty_to_deduct),
-                available_qty=0.0,
-                recommendations={
-                    'sale_id': sale_id,
-                    'message': f'Нет активного рулона/пачки для товара. Необходимо открыть новую упаковку.'
-                }
-            )
-            # Возвращаемся, так как расход уже списан со Stock (шаг 1)
-            return
-
-        # 3. Создаём запись о нормативном расходе в журнале
-        consumption = PackagingConsumption(
-            opening_id=active_opening.id,
-            sale_id=sale_id,
+        stock.quantity -= qty_to_deduct
+        stock.updated_at = datetime.utcnow()
+        
+        movement = Movement(
             product_id=product_id,
-            normative_qty=qty_to_deduct,
-            normative_unit='piece'  # Можно заменить на PackagingUnit.base_unit
+            batch_id=None,
+            movement_type='sale',
+            quantity=qty_to_deduct,
+            sale_id=sale_id,
+            created_by=user_id,
+            reason=f'Сборка заказа #{sale_id}'
         )
-        db.add(consumption)
-        
-        # 4. Проверяем, не нужно ли автозакрыть рулон (если остаток < 10%)
-        await PackagingService._check_auto_close_opening(db, active_opening.id)
+        db.add(movement)
 
 
     @staticmethod

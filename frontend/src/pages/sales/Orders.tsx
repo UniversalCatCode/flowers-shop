@@ -268,12 +268,19 @@ const OrdersPage: React.FC = () => {
   
 
   const handleCompleteAssembly = async (order: Sale) => {
+    if (isCompletingAssembly) {
+      console.log('⏳ Already completing or modal open, skipping');
+      return;
+    }
+    setIsCompletingAssembly(true);
     try {
       await apiClient.post(`/sales/${order.id}/complete`);
       message.success('Сборка завершена, остатки списаны');
       fetchData();
     } catch (error: any) {
       message.error(error.response?.data?.detail || 'Ошибка при завершении сборки');
+    } finally {
+      setIsCompletingAssembly(false);
     }
   };
 
@@ -351,28 +358,9 @@ const OrdersPage: React.FC = () => {
     return prod ? `${prod.name} (${prod.sku})` : `Товар #${productId}`;
   };
 
-  const handleOpenPackaging = async (packagingUnitId: number) => {
-    if (!assemblyAlerts) return;
-    
-    try {
-      await apiClient.post(`/sales/${assemblyAlerts.sale_id}/open_packaging?packaging_unit_id=${packagingUnitId}`);
-      message.success('Рулон открыт');
-      
-      // Закрываем модалку и начинаем сборку
-      setIsAssemblyAlertModalOpen(false);
-      setAssemblyAlerts(null);
-      
-      // Повторяем попытку начать сборку
-      const order = orders.find(o => o.id === assemblyAlerts.sale_id);
-      if (order) {
-        await apiClient.post(`/sales/${order.id}/assemble`);
-        message.success('Сборка начата');
-        fetchData();
-      }
-    } catch (error: any) {
-      message.error(error.response?.data?.detail || 'Ошибка при открытии рулона');
-    }
-  };
+  const [isCompletingAssembly, setIsCompletingAssembly] = useState(false);
+
+
   
   // ============ КОЛОНКИ ТАБЛИЦЫ ============
   const columns = [
@@ -843,47 +831,55 @@ const OrdersPage: React.FC = () => {
           </>
         )}
 
-        {assemblyAlerts.packaging_shortages.length > 0 && (
+            {assemblyAlerts.packaging_shortages?.length > 0 && (
           <>
-            <Title level={5} style={{ color: '#faad14', marginTop: 24 }}>
-              <WarningOutlined /> Нет активных рулонов упаковки:
+            <Title level={5} style={{ color: '#ff4d4f', marginTop: 16 }}>
+              <WarningOutlined /> Не хватает упаковки:
             </Title>
-            {assemblyAlerts.packaging_shortages.map((shortage: any) => (
-              <Card key={shortage.product_id} size="small" style={{ marginBottom: 16 }}>
-                <Text strong>{shortage.product_name}</Text>
-                <Text type="secondary"> (нужно: {shortage.required_qty})</Text>
-              
-                {shortage.available_units_on_stock.length > 0 ? (
-                <>
-                  <div style={{ marginTop: 12 }}>
-                    <Text>Доступные рулоны на складе:</Text>
-                  </div>
-                  <Space direction="vertical" style={{ width: '100%', marginTop: 8 }}>
-                    {shortage.available_units_on_stock.map((unit: any) => (
-                      <Space key={unit.id} style={{ width: '100%', justifyContent: 'space-between' }}>
-                        <Text>{unit.unit_name} ({unit.base_quantity} {unit.base_unit})</Text>
-                        <Button 
-                          type="primary" 
-                          size="small"
-                          onClick={() => handleOpenPackaging(unit.id)}
-                        >
-                          Открыть рулон
-                        </Button>
-                      </Space>
-                    ))}
-                  </Space>
-                </>
-              ) : (
-                <Alert
-                  message="Нет рулонов на складе. Необходимо принять товар от поставщика."
-                  type="warning"
-                  style={{ marginTop: 12 }}
-                />
-              )}
-            </Card>
-          ))}
-        </>
-      )}
+            <Table
+              size="small"
+              dataSource={assemblyAlerts.packaging_shortages}
+              rowKey="product_id"
+              pagination={false}
+              columns={[
+                { title: 'Товар', dataIndex: 'product_name' },
+                { title: 'Нужно', dataIndex: 'required_qty', width: 80 },
+                { title: 'Есть', dataIndex: 'available_qty', width: 80 },
+                { 
+                  title: 'Не хватает', 
+                  dataIndex: 'shortage_qty', 
+                  width: 100,
+                  render: (val) => <Text type="danger">{val}</Text>
+                },
+              ]}
+            />
+          </>
+        )}
+
+            {assemblyAlerts.consumable_shortages?.length > 0 && (
+          <>
+            <Title level={5} style={{ color: '#ff4d4f', marginTop: 16 }}>
+              <WarningOutlined /> Не хватает расходников:
+            </Title>
+            <Table
+              size="small"
+              dataSource={assemblyAlerts.consumable_shortages}
+              rowKey="product_id"
+              pagination={false}
+              columns={[
+                { title: 'Товар', dataIndex: 'product_name' },
+                { title: 'Нужно', dataIndex: 'required_qty', width: 80 },
+                { title: 'Есть', dataIndex: 'available_qty', width: 80 },
+                { 
+                  title: 'Не хватает', 
+                  dataIndex: 'shortage_qty', 
+                  width: 100,
+                  render: (val) => <Text type="danger">{val}</Text>
+                },
+              ]}
+            />
+          </>
+        )}
 
       <div style={{ textAlign: 'right', marginTop: 24 }}>
         <Button onClick={() => {
@@ -896,6 +892,7 @@ const OrdersPage: React.FC = () => {
     </>
   )}
 </Modal>
+
 
     </>
   );

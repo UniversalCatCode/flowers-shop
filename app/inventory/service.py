@@ -6,13 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from decimal import Decimal
 
-from app.inventory.models import Batch, Stock, WriteOff, Movement, PackagingUnit, PurchaseOrder, PurchaseOrderItem, PurchaseOrderReceipt, PurchaseOrderReceiptItem
+from app.inventory.models import Batch, Stock, WriteOff, Movement, PurchaseOrder, PurchaseOrderItem, PurchaseOrderReceipt, PurchaseOrderReceiptItem
 from app.inventory.schemas import BatchCreate, StockByProduct, WriteOffCreate
 from app.catalog.models import Product, Recipe, RecipeItem
 from app.stores.alert_service import AlertService
 from app.catalog.models import Product as CatalogProduct
-
-
 
 class BatchService:
     @staticmethod
@@ -68,7 +66,6 @@ class BatchService:
         await db.refresh(batch)
         return batch
 
-
     @staticmethod
     async def create_receipt(
         db: AsyncSession, 
@@ -79,9 +76,9 @@ class BatchService:
         Единая приёмка товара от поставщика.
         Автоматически создаёт:
         - batches для товаров типа 'flower'
-        - packaging_units для товаров типа 'packaging'
+        - stock для товаров типа 'packaging' и 'consumable'
         """
-        from app.inventory.models import PackagingUnit, Movement
+        from app.inventory.models import Movement
         from app.catalog.models import Supplier
         
         # Проверка поставщика
@@ -93,7 +90,6 @@ class BatchService:
         receipt_number = data.receipt_number or f"RCPT-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
         
         created_batches = []
-        created_units = []
         skipped_items = []
         
         for item in data.items:
@@ -102,34 +98,30 @@ class BatchService:
                 skipped_items.append(f"Товар id={item.product_id} не найден")
                 continue
             
-            # === НОВАЯ ЛОГИКА: ПРОВЕРКА ЦЕНЫ И СОЗДАНИЕ АЛЕРТОВ ===
+            # === ПРОВЕРКА ЦЕНЫ И СОЗДАНИЕ АЛЕРТОВ ===
             old_price = product.purchase_price
             new_price = item.purchase_price
             price_changed = False
             alert_message = ""
 
             if old_price is None:
-                # Первый приход: просто ставим цену
                 product.purchase_price = new_price
                 price_changed = True
                 alert_message = f"Установлена первая цена закупки: {new_price} ₽"
             elif new_price > old_price:
-                # Цена выросла: обновляем и создаём алерт
                 product.purchase_price = new_price
                 price_changed = True
-                
-                # Ищем букеты, которые используют этот товар (используем псевдонимы для ясности)
-
                 
                 stmt_bouquets = (
                     select(CatalogProduct.name)
                     .where(
-                    CatalogProduct.recipe_id.in_(
-                    select(RecipeItem.recipe_id)
-                    .where(RecipeItem.product_id == product.id)
-                    ))
-                    .distinct()
+                        CatalogProduct.recipe_id.in_(
+                            select(RecipeItem.recipe_id)
+                            .where(RecipeItem.product_id == product.id)
+                        )
                     )
+                    .distinct()
+                )
                 bouquet_result = await db.execute(stmt_bouquets)
                 affected_bouquets = [row[0] for row in bouquet_result.all()]
                 
@@ -138,14 +130,12 @@ class BatchService:
 
             if price_changed:
                 await db.flush()
-    
-                # Используем существующий AlertService
                 await AlertService.create_alert(
                     db=db,
                     alert_type='price_increase',
                     product_id=product.id,
-                    required_qty=new_price,  # Новая цена
-                    available_qty=old_price or 0,  # Старая цена
+                    required_qty=new_price,
+                    available_qty=old_price or 0,
                     recommendations={
                         'old_price': float(old_price) if old_price else None,
                         'new_price': float(new_price),
@@ -153,10 +143,6 @@ class BatchService:
                     }
                 )
 
-            # ========================================================
-
-
-            
             if product.product_type == 'flower':
                 # === ЦВЕТЫ: создаём партию ===
                 batch = Batch(
@@ -174,7 +160,6 @@ class BatchService:
                 db.add(batch)
                 await db.flush()
                 
-                # Обновляем stock
                 stock = await db.scalar(
                     select(Stock).where(Stock.product_id == item.product_id)
                 )
@@ -185,7 +170,6 @@ class BatchService:
                     stock = Stock(product_id=item.product_id, quantity=item.quantity)
                     db.add(stock)
                 
-                # Создаём движение
                 movement = Movement(
                     batch_id=batch.id,
                     movement_type='receipt',
@@ -194,48 +178,10 @@ class BatchService:
                     created_by=user_id
                 )
                 db.add(movement)
-                
                 created_batches.append(batch)
                 
             elif product.product_type == 'packaging':
-                # === УПАКОВКА: создаём единицу на складе (НЕ в обороте!) ===
-                unit_type = item.unit_type or 'roll'
-                base_unit = item.base_unit or 'piece'
-                base_quantity = item.base_quantity or item.quantity
-                unit_name = f"{product.name} ({base_quantity} {base_unit}) — {receipt_number}"
-                
-                unit = PackagingUnit(
-                    product_id=item.product_id,
-                    supplier_id=data.supplier_id,
-                    unit_type=unit_type,
-                    unit_name=unit_name,
-                    base_quantity=base_quantity,
-                    base_unit=base_unit,
-                    purchase_price=item.purchase_price,
-                    received_at=received_at,
-                    is_active=True
-                )
-                db.add(unit)
-                await db.flush()
-                
-                # Обновляем stock (количество = base_quantity, т.к. это одна физическая единица)
-                stock = await db.scalar(
-                    select(Stock).where(Stock.product_id == item.product_id)
-                )
-                if stock:
-                    stock.quantity += base_quantity
-                    stock.updated_at = datetime.utcnow()
-                else:
-                    stock = Stock(product_id=item.product_id, quantity=base_quantity)
-                    db.add(stock)
-                
-                created_units.append(unit)
-                
-            elif product.product_type == 'bouquet':
-                skipped_items.append(f"Букет '{product.name}' не принимается на склад (создаётся из компонентов)")
-
-            elif product.product_type == 'consumable':
-                # === ПРОЧЕЕ: просто увеличиваем stock, без партий и рулонов ===
+                # === УПАКОВКА: просто увеличиваем stock (как consumable) ===
                 stock = await db.scalar(
                     select(Stock).where(Stock.product_id == item.product_id)
                 )
@@ -246,7 +192,31 @@ class BatchService:
                     stock = Stock(product_id=item.product_id, quantity=item.quantity)
                     db.add(stock)
                 
-                # Создаём движение (теперь с product_id и batch_id=None)
+                movement = Movement(
+                    product_id=item.product_id,
+                    batch_id=None,
+                    movement_type='receipt',
+                    quantity=item.quantity,
+                    reason=f'Приёмка {receipt_number} (Упаковка)',
+                    created_by=user_id
+                )
+                db.add(movement)
+                
+            elif product.product_type == 'bouquet':
+                skipped_items.append(f"Букет '{product.name}' не принимается на склад (создаётся из компонентов)")
+
+            elif product.product_type == 'consumable':
+                # === ПРОЧЕЕ: просто увеличиваем stock ===
+                stock = await db.scalar(
+                    select(Stock).where(Stock.product_id == item.product_id)
+                )
+                if stock:
+                    stock.quantity += item.quantity
+                    stock.updated_at = datetime.utcnow()
+                else:
+                    stock = Stock(product_id=item.product_id, quantity=item.quantity)
+                    db.add(stock)
+                
                 movement = Movement(
                     product_id=item.product_id,
                     batch_id=None,
@@ -256,7 +226,6 @@ class BatchService:
                     created_by=user_id
                 )
                 db.add(movement)
-
 
             else:
                 skipped_items.append(f"Неизвестный тип товара '{product.product_type}' для '{product.name}'")
@@ -268,7 +237,6 @@ class BatchService:
             "supplier": supplier.name,
             "received_at": received_at,
             "batches_created": len(created_batches),
-            "packaging_units_created": len(created_units),
             "skipped": skipped_items,
             "notes": data.notes
         }
@@ -287,10 +255,10 @@ class BatchService:
         received_quality_pct: int = None
     ) -> None:
         """
-        Создаёт партию или единицу упаковки и обновляет остатки.
+        Создаёт партию или обновляет stock.
         Используется при приёмке товара по заказу поставщику.
         """
-        from app.inventory.models import PackagingUnit, Movement
+        from decimal import Decimal
         
         product = await db.get(Product, product_id)
         if not product:
@@ -299,17 +267,13 @@ class BatchService:
         received_at = datetime.utcnow()
         quantity = Decimal(str(quantity))
         
-        # Обновляем закупочную цену товара
-        if product.purchase_price is None or purchase_price > product.purchase_price:
-            product.purchase_price = purchase_price
-        
         if product.product_type == 'flower':
             # === ЦВЕТЫ: создаём партию ===
             batch = Batch(
                 product_id=product_id,
                 supplier_id=supplier_id,
                 batch_number=batch_number,
-                purchase_price=purchase_price,
+                purchase_price=Decimal(str(purchase_price)),
                 received_at=received_at,
                 initial_qty=quantity,
                 current_qty=quantity,
@@ -319,7 +283,6 @@ class BatchService:
             db.add(batch)
             await db.flush()
             
-            # Обновляем stock
             stock = await db.scalar(
                 select(Stock).where(Stock.product_id == product_id)
             )
@@ -330,68 +293,39 @@ class BatchService:
                 stock = Stock(product_id=product_id, quantity=quantity)
                 db.add(stock)
             
-            # Создаём движение
             movement = Movement(
                 batch_id=batch.id,
-                product_id=product_id,
-                movement_type='receipt',
-                quantity=quantity,
-                reason=f'Приёмка по заказу {batch_number}',
-                created_by=None  # user_id передадим отдельно если нужно
-            )
-            db.add(movement)
-            
-        elif product.product_type == 'packaging':
-            # === УПАКОВКА: создаём единицу ===
-            effective_unit_type = unit_type or 'roll'
-            effective_base_qty = base_quantity or quantity
-            effective_base_unit = base_unit or 'piece'
-            unit = PackagingUnit(
-                product_id=product_id,
-                supplier_id=supplier_id,
-                unit_type=effective_unit_type,
-                unit_name=f"{product.name} ({effective_base_qty} {effective_base_unit}) — {batch_number}",
-                base_quantity=effective_base_qty,
-                base_unit=effective_base_unit,
-                purchase_price=purchase_price,
-                received_at=received_at,
-                is_active=True
-            )
-            db.add(unit)
-            await db.flush()
-            
-            # Обновляем stock
-            stock = await db.scalar(
-                select(Stock).where(Stock.product_id == product_id)
-            )
-            if stock:
-                stock.quantity += quantity
-                stock.updated_at = datetime.utcnow()
-            else:
-                stock = Stock(product_id=product_id, quantity=quantity)
-                db.add(stock)
-            
-        elif product.product_type == 'consumable':
-            # === ПРОЧЕЕ: просто обновляем остаток ===
-            stock = await db.scalar(
-                select(Stock).where(Stock.product_id == product_id)
-            )
-            if stock:
-                stock.quantity += quantity
-                stock.updated_at = datetime.utcnow()
-            else:
-                stock = Stock(product_id=product_id, quantity=quantity)
-                db.add(stock)
-            
-            # Создаём движение без партии
-            movement = Movement(
-                product_id=product_id,
                 movement_type='receipt',
                 quantity=quantity,
                 reason=f'Приёмка по заказу {batch_number}',
                 created_by=None
             )
             db.add(movement)
+            
+        elif product.product_type in ('packaging', 'consumable'):
+            # === УПАКОВКА / ПРОЧЕЕ: просто увеличиваем stock ===
+            stock = await db.scalar(
+                select(Stock).where(Stock.product_id == product_id)
+            )
+            if stock:
+                stock.quantity += quantity
+                stock.updated_at = datetime.utcnow()
+            else:
+                stock = Stock(product_id=product_id, quantity=quantity)
+                db.add(stock)
+            
+            movement = Movement(
+                product_id=product_id,
+                batch_id=None,
+                movement_type='receipt',
+                quantity=quantity,
+                reason=f'Приёмка по заказу {batch_number}',
+                created_by=None
+            )
+            db.add(movement)
+            
+        elif product.product_type == 'bouquet':
+            pass  # Букеты не принимаются на склад
 
     @staticmethod
     async def get_by_id(db: AsyncSession, batch_id: int) -> Optional[Batch]:
@@ -424,7 +358,6 @@ class BatchService:
         result = await db.execute(stmt)
         items = list(result.scalars().all())
         return items, total or 0
-
 
     @staticmethod
     async def create_write_off(
@@ -482,7 +415,6 @@ class BatchService:
         await db.refresh(write_off)
         return write_off
 
-
     @staticmethod
     async def get_write_offs(
         db: AsyncSession,
@@ -513,7 +445,6 @@ class BatchService:
         
         return items, total or 0
 
-
 class StockService:
     @staticmethod
     async def get_by_product(db: AsyncSession, product_id: int) -> Optional[Stock]:
@@ -524,7 +455,6 @@ class StockService:
     @staticmethod
     async def get_all_with_details(db: AsyncSession) -> List[StockByProduct]:
         """Возвращает остатки с информацией о товаре, партиях и единицах упаковки."""
-        from app.inventory.models import PackagingUnit
         
         stmt = (
             select(
@@ -534,17 +464,14 @@ class StockService:
                 Product.product_type,  # <-- ДОБАВЛЕНО
                 Stock.quantity.label('total_quantity'),
                 func.count(Batch.id).label('batches_count'),
-                func.count(PackagingUnit.id).label('packaging_units_count')  # <-- ДОБАВЛЕНО
             )
             .join(Product, Stock.product_id == Product.id)
             .outerjoin(Batch, (Batch.product_id == Stock.product_id) & (Batch.status == 'active'))
-            .outerjoin(PackagingUnit, (PackagingUnit.product_id == Stock.product_id) & (PackagingUnit.is_active == True))  # <-- ДОБАВЛЕНО
             .group_by(Stock.product_id, Product.name, Product.sku, Product.product_type, Stock.quantity)
             .order_by(Product.name)
         )
         result = await db.execute(stmt)
         return [StockByProduct(**row._mapping) for row in result]
-
 
     @staticmethod
     async def create_write_off(
@@ -817,8 +744,9 @@ class PurchaseOrderService:
         db.add(receipt)
         await db.flush()
         
-        # Обрабатываем позиции приёмки
-        for item_data in data.items:
+        try:
+          # Обрабатываем позиции приёмки
+          for item_data in data.items:
             # Ищем позицию в заказе
             order_item = None
             for oi in order.items:
@@ -896,6 +824,10 @@ class PurchaseOrderService:
                 base_unit=getattr(item_data, 'base_unit', None),
                 received_quality_pct=getattr(item_data, 'received_quality_pct', None)
             )
+        
+        except Exception as e:
+            await db.rollback()
+            raise ValueError(f"Ошибка при приёмке: {str(e)}")
         
         # Проверяем, полностью ли принят заказ
         all_received = all(
@@ -1076,9 +1008,10 @@ class PurchaseOrderService:
             )
             available_qty = stock.quantity if stock else 0
             
-            # Вычитаем резерв на витрину (используем CapabilityService)
-            reserved_qty = await CapabilityService.get_reserved_for_bouquets(db, comp_id)
-            effective_available = max(0, available_qty - reserved_qty)
+            # Фактический остаток без вычета резерва
+            # Заказ поставщику должен видеть реальное наличие на складе,
+            # чтобы покрыть дефицит всех активных заказов
+            effective_available = available_qty
             
             shortage = max(0, comp_data["required_qty"] - effective_available)
             

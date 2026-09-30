@@ -3,7 +3,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog.models import Product, Recipe, RecipeItem
-from app.inventory.models import Batch, PackagingUnit  # <-- Они живут здесь!
+from app.inventory.models import Batch
 
 
 
@@ -85,13 +85,13 @@ class CostService:
         """Средневзвешенная цена из активных рулонов/пачек"""
         stmt = (
             select(
-                func.sum(PackagingUnit.base_quantity * PackagingUnit.purchase_price).label('total_value'),
-                func.sum(PackagingUnit.base_quantity).label('total_qty')
+                func.sum(Stock.quantity * Product.purchase_price).label('total_value'),
+                func.sum(Stock.quantity).label('total_qty')
             )
+            .select_from(Stock)
+            .join(Product, Stock.product_id == Product.id)
             .where(
-                PackagingUnit.product_id == product.id,
-                PackagingUnit.is_active == True,
-                PackagingUnit.purchase_price.isnot(None)
+                Stock.product_id == product.id
             )
         )
         result = await db.execute(stmt)

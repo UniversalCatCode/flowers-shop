@@ -3,7 +3,6 @@ from typing import Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 from decimal import Decimal
 
-
 # ============ BATCHES (Партии) ============
 class BatchBase(BaseModel):
     product_id: int
@@ -15,10 +14,8 @@ class BatchBase(BaseModel):
     initial_qty: Decimal = Field(..., gt=0, decimal_places=2)
     notes: Optional[str] = None
 
-
 class BatchCreate(BatchBase):
     pass
-
 
 class BatchOut(BatchBase):
     model_config = ConfigDict(from_attributes=True)
@@ -30,11 +27,9 @@ class BatchOut(BatchBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
-
 class BatchListOut(BaseModel):
     total: int
     items: List[BatchOut]
-
 
 # ============ STOCK (Остатки) ============
 class StockOut(BaseModel):
@@ -45,7 +40,6 @@ class StockOut(BaseModel):
     quantity: Decimal
     updated_at: Optional[datetime] = None
 
-
 class StockByProduct(BaseModel):
     product_id: int
     product_name: str
@@ -53,138 +47,9 @@ class StockByProduct(BaseModel):
     product_type: str  # <-- ДОБАВЛЕНО
     total_quantity: Decimal
     batches_count: int = 0
-    packaging_units_count: int = 0  # <-- ДОБАВЛЕНО
-
-
-
 
 # ============ PACKAGING UNITS ============
-class PackagingUnitBase(BaseModel):
-    product_id: int
-    supplier_id: Optional[int] = None
-    unit_type: str = Field(..., pattern="^(roll|pack|box)$")
-    unit_name: str = Field(..., max_length=100)
-    base_quantity: Decimal = Field(..., gt=0, decimal_places=2)
-    base_unit: str = Field(..., pattern="^(meter|stem|piece)$")
-    actual_quantity: Optional[Decimal] = Field(None, decimal_places=2)
-    purchase_price: Decimal = Field(..., gt=0, decimal_places=2)
 
-
-class PackagingUnitCreate(PackagingUnitBase):
-    pass
-
-
-class PackagingUnitUpdate(BaseModel):
-    product_id: Optional[int] = None
-    supplier_id: Optional[int] = None
-    unit_type: Optional[str] = Field(None, pattern="^(roll|pack|box)$")
-    unit_name: Optional[str] = Field(None, max_length=100)
-    base_quantity: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
-    base_unit: Optional[str] = Field(None, pattern="^(meter|stem|piece)$")
-    actual_quantity: Optional[Decimal] = Field(None, decimal_places=2)
-    purchase_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
-    is_active: Optional[bool] = None
-
-
-class PackagingUnitOut(PackagingUnitBase):
-    model_config = ConfigDict(from_attributes=True)
-    
-    id: int
-    received_at: datetime
-    is_active: bool
-    created_at: datetime
-
-
-class PackagingUnitListOut(BaseModel):
-    total: int
-    items: List[PackagingUnitOut]
-
-
-# ============ PACKAGING OPENINGS ============
-class PackagingOpeningBase(BaseModel):
-    packaging_unit_id: int
-    initial_qty: Decimal = Field(..., gt=0, decimal_places=2)
-    notes: Optional[str] = None
-
-
-class PackagingOpeningCreate(PackagingOpeningBase):
-    pass
-
-
-class PackagingOpeningUpdate(BaseModel):
-    status: Optional[str] = Field(None, pattern="^(active|closed)$")
-    final_qty: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
-    notes: Optional[str] = None
-
-
-class PackagingOpeningOut(PackagingOpeningBase):
-    model_config = ConfigDict(from_attributes=True)
-    
-    id: int
-    opened_at: datetime
-    opened_by: Optional[int] = None
-    status: str
-    closed_at: Optional[datetime] = None
-    created_at: datetime
-
-
-class PackagingOpeningListOut(BaseModel):
-    total: int
-    items: List[PackagingOpeningOut]
-
-
-# ============ PACKAGING CONSUMPTION ============
-class PackagingConsumptionBase(BaseModel):
-    opening_id: int
-    sale_id: Optional[int] = None
-    product_id: int
-    normative_qty: Decimal = Field(..., gt=0, decimal_places=2)
-    normative_unit: str = Field(..., pattern="^(meter|stem|piece)$")
-
-
-class PackagingConsumptionCreate(PackagingConsumptionBase):
-    pass
-
-
-class PackagingConsumptionOut(PackagingConsumptionBase):
-    model_config = ConfigDict(from_attributes=True)
-    
-    id: int
-    created_at: datetime
-
-
-class PackagingConsumptionListOut(BaseModel):
-    total: int
-    items: List[PackagingConsumptionOut]
-
-
-# ============ PACKAGING ADJUSTMENTS ============
-class PackagingAdjustmentBase(BaseModel):
-    opening_id: int
-    normative_total: Decimal = Field(..., decimal_places=2)
-    actual_total: Decimal = Field(..., decimal_places=2)
-    adjustment_factor: Decimal = Field(..., decimal_places=3)
-    is_anomaly: bool = False
-    anomaly_reason: Optional[str] = Field(None, max_length=200)
-    cost_impact: Optional[Decimal] = Field(None, decimal_places=2)
-
-
-class PackagingAdjustmentCreate(PackagingAdjustmentBase):
-    pass
-
-
-class PackagingAdjustmentOut(PackagingAdjustmentBase):
-    model_config = ConfigDict(from_attributes=True)
-    
-    id: int
-    created_at: datetime
-
-
-class PackagingAdjustmentListOut(BaseModel):
-    total: int
-    items: List[PackagingAdjustmentOut]
-
-# ============ RECEIPT (Приёмка товара) ============
 class ReceiptItemCreate(BaseModel):
     product_id: int
     quantity: Decimal = Field(..., gt=0, decimal_places=2)
@@ -195,7 +60,6 @@ class ReceiptItemCreate(BaseModel):
     base_unit: Optional[str] = None  # 'meter', 'piece', 'stem'
     received_quality_pct: Optional[Decimal] = None  # процент годного (для аналитики)
     notes: Optional[str] = None
-
 
 class ReceiptCreate(BaseModel):
     supplier_id: int
@@ -226,8 +90,6 @@ class WriteOffListOut(BaseModel):
     total: int
     items: List[WriteOffOut]
 
-
-
 # ============ PURCHASE ORDERS (Заказы поставщикам) ============
 
 class PurchaseOrderItemCreate(BaseModel):
@@ -238,7 +100,6 @@ class PurchaseOrderItemCreate(BaseModel):
     unit_price: Decimal = Field(..., ge=0, decimal_places=2)
     notes: Optional[str] = None
 
-
 class PurchaseOrderCreate(BaseModel):
     """Создание заказа поставщику"""
     supplier_invoice_number: Optional[str] = Field(None, max_length=100)
@@ -248,14 +109,12 @@ class PurchaseOrderCreate(BaseModel):
     notes: Optional[str] = None
     items: List[PurchaseOrderItemCreate] = Field(..., min_length=1)
 
-
 class PurchaseOrderItemUpdate(BaseModel):
     """Обновление позиции заказа (только в статусе draft)"""
     product_id: Optional[int] = None
     ordered_qty: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
     unit_price: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     notes: Optional[str] = None
-
 
 class PurchaseOrderUpdate(BaseModel):
     """Обновление заказа (только в статусе draft)"""
@@ -266,17 +125,14 @@ class PurchaseOrderUpdate(BaseModel):
     notes: Optional[str] = None
     items: Optional[List[PurchaseOrderItemUpdate]] = None
 
-
 class PurchaseOrderConfirm(BaseModel):
     """Подтверждение заказа — номер счёта обязателен"""
     supplier_invoice_number: str = Field(..., max_length=100, description="Номер счёта от поставщика")
     invoice_date: Optional[date] = None
 
-
 class PurchaseOrderStatusUpdate(BaseModel):
     """Смена статуса заказа"""
     status: str = Field(..., pattern='^(confirmed|cancelled)$')
-
 
 class PurchaseOrderItemOut(BaseModel):
     """Позиция заказа с деталями товара"""
@@ -293,7 +149,6 @@ class PurchaseOrderItemOut(BaseModel):
     unit_price: Decimal
     notes: Optional[str] = None
 
-
 class PurchaseOrderReceiptItemOut(BaseModel):
     """Позиция акта приёмки"""
     model_config = ConfigDict(from_attributes=True)
@@ -304,7 +159,6 @@ class PurchaseOrderReceiptItemOut(BaseModel):
     quantity: Decimal
     unit_price: Decimal
     notes: Optional[str] = None
-
 
 class PurchaseOrderReceiptOut(BaseModel):
     """Акт приёмки"""
@@ -319,7 +173,6 @@ class PurchaseOrderReceiptOut(BaseModel):
     status: str
     notes: Optional[str] = None
     items: List[PurchaseOrderReceiptItemOut] = []
-
 
 class PurchaseOrderOut(BaseModel):
     """Заказ поставщику с деталями"""
@@ -350,12 +203,10 @@ class PurchaseOrderOut(BaseModel):
     items: List[PurchaseOrderItemOut] = []
     receipts: List[PurchaseOrderReceiptOut] = []
 
-
 class PurchaseOrderListOut(BaseModel):
     """Список заказов"""
     total: int
     items: List[PurchaseOrderOut]
-
 
 # ============ ПРИЁМКА ЗАКАЗА ============
 
@@ -367,7 +218,7 @@ class PurchaseOrderReceiptItemCreate(BaseModel):
     
     # Поля для упаковки (product_type == 'packaging')
     unit_type: Optional[str] = Field(None, pattern='^(roll|pack|box)$')
-    base_quantity: Optional[float] = Field(None, gt=0)
+    base_quantity: Optional[Decimal] = Field(None, gt=0)
     base_unit: Optional[str] = Field(None, pattern='^(meter|piece|kg)$')
     
     # Качество для цветов (product_type == 'flower')
@@ -375,13 +226,11 @@ class PurchaseOrderReceiptItemCreate(BaseModel):
     
     notes: Optional[str] = None
 
-
 class PurchaseOrderReceiptCreate(BaseModel):
     """Создание акта приёмки"""
     receipt_number: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = None
     items: List[PurchaseOrderReceiptItemCreate] = Field(..., min_length=1)
-
 
 # ============ РАСЧЁТ ПО БУКЕТАМ ============
 
@@ -390,11 +239,9 @@ class BouquetSelection(BaseModel):
     bouquet_product_id: int
     quantity: int = Field(..., gt=0)
 
-
 class BouquetCalculationRequest(BaseModel):
     """Запрос на расчёт потребностей по букетам"""
     bouquets: List[BouquetSelection] = Field(..., min_length=1)
-
 
 class BouquetCalculationItem(BaseModel):
     """Компонент для заказа (результат расчёта)"""
@@ -412,7 +259,6 @@ class BouquetCalculationItem(BaseModel):
     
     # Рекомендуемая цена (последняя закупочная)
     last_purchase_price: Optional[Decimal] = None
-
 
 class BouquetCalculationResponse(BaseModel):
     """Результат расчёта потребностей по букетам"""

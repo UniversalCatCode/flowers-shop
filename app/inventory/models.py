@@ -4,7 +4,6 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
 
-
 class Stock(Base):
     """Временный кэш остатков для совместимости с текущим роутером."""
     __tablename__ = "stock"
@@ -14,7 +13,6 @@ class Stock(Base):
     product_id = Column(BigInteger, ForeignKey('catalog.products.id'), nullable=False, unique=True)
     quantity = Column(DECIMAL(10, 2), nullable=False, default=0)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
 
 class Batch(Base):
     __tablename__ = "batches"
@@ -38,7 +36,6 @@ class Batch(Base):
 
     movements = relationship("Movement", back_populates="batch")
     write_offs = relationship("WriteOff", back_populates="batch")
-
 
 class Movement(Base):
     __tablename__ = "movements"
@@ -65,8 +62,6 @@ class Movement(Base):
     sale = relationship("Sale")
     user = relationship("User")
 
-
-
 class WriteOff(Base):
     __tablename__ = "write_offs"
     __table_args__ = {'schema': 'inventory'}
@@ -81,80 +76,6 @@ class WriteOff(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     batch = relationship("Batch", back_populates="write_offs")
-
-
-class PackagingUnit(Base):
-    __tablename__ = "packaging_units"
-    __table_args__ = {'schema': 'inventory'}
-
-    id = Column(BigInteger, primary_key=True, index=True)
-    product_id = Column(BigInteger, ForeignKey('catalog.products.id'), nullable=False)
-    supplier_id = Column(BigInteger, ForeignKey('catalog.suppliers.id'), nullable=True)
-    unit_type = Column(String(50), nullable=False)
-    unit_name = Column(String(100), nullable=False)
-    base_quantity = Column(DECIMAL(10, 2), nullable=False)
-    base_unit = Column(String(50), nullable=False)
-    actual_quantity = Column(DECIMAL(10, 2), nullable=True)
-    purchase_price = Column(DECIMAL(10, 2), nullable=False)
-    received_at = Column(DateTime(timezone=True), server_default=func.now())
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    openings = relationship("PackagingOpening", back_populates="packaging_unit")
-
-
-class PackagingOpening(Base):
-    __tablename__ = "packaging_openings"
-    __table_args__ = {'schema': 'inventory'}
-
-    id = Column(BigInteger, primary_key=True, index=True)
-    packaging_unit_id = Column(BigInteger, ForeignKey('inventory.packaging_units.id'), nullable=False)
-    opened_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    opened_by = Column(BigInteger, ForeignKey('users.users.id'), nullable=True)
-    initial_qty = Column(DECIMAL(10, 2), nullable=False)
-    status = Column(String(50), default='active')
-    closed_at = Column(DateTime(timezone=True), nullable=True)
-    final_qty = Column(DECIMAL(10, 2), nullable=True)
-    notes = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    packaging_unit = relationship("PackagingUnit", back_populates="openings")
-    consumption = relationship("PackagingConsumption", back_populates="opening")
-    adjustments = relationship("PackagingAdjustment", back_populates="opening")
-
-
-class PackagingConsumption(Base):
-    __tablename__ = "packaging_consumption"
-    __table_args__ = {'schema': 'inventory'}
-
-    id = Column(BigInteger, primary_key=True, index=True)
-    opening_id = Column(BigInteger, ForeignKey('inventory.packaging_openings.id'), nullable=False)
-    sale_id = Column(BigInteger, nullable=True)
-    product_id = Column(BigInteger, ForeignKey('catalog.products.id'), nullable=False)
-    normative_qty = Column(DECIMAL(10, 2), nullable=False)
-    normative_unit = Column(String(50), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    opening = relationship("PackagingOpening", back_populates="consumption")
-
-
-class PackagingAdjustment(Base):
-    __tablename__ = "packaging_adjustments"
-    __table_args__ = {'schema': 'inventory'}
-
-    id = Column(BigInteger, primary_key=True, index=True)
-    opening_id = Column(BigInteger, ForeignKey('inventory.packaging_openings.id'), nullable=False)
-    normative_total = Column(DECIMAL(10, 2), nullable=False)
-    actual_total = Column(DECIMAL(10, 2), nullable=False)
-    adjustment_factor = Column(DECIMAL(5, 3), nullable=False)
-    is_anomaly = Column(Boolean, default=False)
-    anomaly_reason = Column(String(200), nullable=True)
-    cost_impact = Column(DECIMAL(10, 2), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    opening = relationship("PackagingOpening", back_populates="adjustments")
-
-# ============ PURCHASE ORDERS (Заказы поставщикам) ============
 
 class PurchaseOrder(Base):
     """
@@ -209,7 +130,6 @@ class PurchaseOrder(Base):
     items = relationship("PurchaseOrderItem", back_populates="order", cascade="all, delete-orphan")
     receipts = relationship("PurchaseOrderReceipt", back_populates="order", cascade="all, delete-orphan")
 
-
 class PurchaseOrderItem(Base):
     """
     Позиция заказа поставщику.
@@ -240,7 +160,6 @@ class PurchaseOrderItem(Base):
     order = relationship("PurchaseOrder", back_populates="items")
     product = relationship("Product", foreign_keys=[product_id])
 
-
 class PurchaseOrderReceipt(Base):
     """
     Акт приёмки по заказу.
@@ -270,7 +189,6 @@ class PurchaseOrderReceipt(Base):
     order = relationship("PurchaseOrder", back_populates="receipts")
     receiver = relationship("User", foreign_keys=[received_by])
     items = relationship("PurchaseOrderReceiptItem", back_populates="receipt", cascade="all, delete-orphan")
-
 
 class PurchaseOrderReceiptItem(Base):
     """

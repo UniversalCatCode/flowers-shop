@@ -16,7 +16,7 @@ from app.core.database import Base
 
 from app.users.models import User, Role, Permission, user_roles, role_permissions
 from app.catalog.models import Category, Product, Supplier, Recipe, RecipeItem
-from app.inventory.models import Batch, Movement, WriteOff, PackagingUnit, PackagingOpening, PackagingConsumption, PackagingAdjustment, Stock
+from app.inventory.models import Batch, Movement, WriteOff, Stock
 from app.stores.models import Store, StoreProduct, StorePriority, AvailabilityAlert
 from app.sales.models import Sale, SaleItem, SaleFee
 from app.finance.models import PricingRule, ProfitTarget, PriceHistory

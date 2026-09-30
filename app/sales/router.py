@@ -22,8 +22,6 @@ from app.sales.assembly_service import OrderAssemblyService
 # ПРЕФИКС ЗАДАЁТСЯ ЗДЕСЬ, ОДИН РАЗ
 router = APIRouter(prefix="/sales", tags=["sales"])
 
-
-
 # ============ SALES (Продажи) ============
 # Пути ОТНОСИТЕЛЬНЫЕ — без "/sales" в начале
 @router.post("", response_model=SaleOut, status_code=201)
@@ -37,7 +35,6 @@ async def create_sale(
         return await SaleService.create(db, data, current_user.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @router.get("", response_model=SaleListOut)
 async def list_sales(
@@ -54,7 +51,6 @@ async def list_sales(
     )
     return SaleListOut(total=total, items=items)
 
-
 @router.get("/{sale_id}", response_model=SaleOut)
 async def get_sale(
     sale_id: int,
@@ -66,7 +62,6 @@ async def get_sale(
         raise HTTPException(status_code=404, detail="Sale not found")
     return sale
 
-
 # ============ ОТЧЁТЫ ============
 @router.get("/reports/stock-by-batches", response_model=List[StockByBatch])
 async def report_stock_by_batches(
@@ -75,7 +70,6 @@ async def report_stock_by_batches(
 ):
     """Возвращает остатки с разбивкой по партиям."""
     return await ReportService.get_stock_by_batches(db)
-
 
 @router.get("/reports/sales", response_model=List[SalesReportItem])
 async def report_sales(
@@ -86,7 +80,6 @@ async def report_sales(
 ):
     """Возвращает детализацию продаж за период."""
     return await ReportService.get_sales_report(db, date_from, date_to)
-
 
 # ============ ORDER LIFECYCLE ENDPOINTS ============
 @router.get("/{sale_id}/check_resources", response_model=dict)
@@ -102,56 +95,6 @@ async def check_assembly_resources(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-@router.post("/{sale_id}/open_packaging", response_model=dict)
-async def open_packaging_for_order(
-    sale_id: int,
-    packaging_unit_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("order.assemble"))
-):
-    """Быстро открывает рулон упаковки для сборки заказа"""
-    try:
-        from app.inventory.models import PackagingUnit, PackagingOpening
-        from datetime import datetime
-        
-        # Проверяем, что рулон существует
-        unit = await db.get(PackagingUnit, packaging_unit_id)
-        if not unit:
-            raise ValueError("Единица упаковки не найдена")
-        
-        # Проверяем, что нет активного открытия для этого рулона
-        stmt = select(PackagingOpening).where(
-            PackagingOpening.packaging_unit_id == packaging_unit_id,
-            PackagingOpening.status == 'active'
-        )
-        result = await db.execute(stmt)
-        existing_opening = result.scalar_one_or_none()
-        
-        if existing_opening:
-            raise ValueError("Этот рулон уже открыт")
-        
-        # Создаём открытие
-        opening = PackagingOpening(
-            packaging_unit_id=packaging_unit_id,
-            initial_qty=unit.base_quantity,
-            opened_by=current_user.id,
-            status='active',
-            opened_at=datetime.utcnow(),
-            notes=f"Открыт для сборки заказа #{sale_id}"
-        )
-        db.add(opening)
-        await db.commit()
-        await db.refresh(opening)
-        
-        return {
-            'opening_id': opening.id,
-            'packaging_unit_id': packaging_unit_id,
-            'initial_qty': float(unit.base_quantity),
-            'message': f"Рулон '{unit.unit_name}' успешно открыт"
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
 @router.post("/{sale_id}/assemble", response_model=SaleOut)
 async def start_assembly(
     sale_id: int,
@@ -165,7 +108,6 @@ async def start_assembly(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @router.post("/{sale_id}/complete", response_model=SaleOut)
 async def complete_assembly(
     sale_id: int,
@@ -178,9 +120,6 @@ async def complete_assembly(
         return sale
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-
 
 @router.post("/{sale_id}/cancel", response_model=SaleOut)
 async def cancel_order(
@@ -196,10 +135,6 @@ async def cancel_order(
         return sale
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-
-
 
 @router.post("/{sale_id}/ship", response_model=SaleOut)
 async def ship_order(
@@ -224,7 +159,6 @@ async def ship_order(
     await db.refresh(sale)
     return sale
 
-
 @router.post("/{sale_id}/complete_delivery", response_model=SaleOut)
 async def complete_delivery(
     sale_id: int,
@@ -247,7 +181,6 @@ async def complete_delivery(
     await db.commit()
     await db.refresh(sale)
     return sale
-
 
 @router.post("/{sale_id}/return", response_model=SaleOut)
 async def return_order(

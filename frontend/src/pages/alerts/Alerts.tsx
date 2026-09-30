@@ -78,8 +78,6 @@ const AlertsPage: React.FC = () => {
     switch (type) {
       case 'price_increase':
         return <Tag color="orange" icon={<DollarOutlined />}>Повышение цены</Tag>;
-      case 'packaging_shortage':
-        return <Tag color="red" icon={<WarningOutlined />}>Нехватка упаковки</Tag>;
       case 'low_stock':
         return <Tag color="red" icon={<WarningOutlined />}>Низкий остаток</Tag>;
       case 'no_price':
@@ -129,28 +127,6 @@ const AlertsPage: React.FC = () => {
           </Space>
         );
       
-      case 'packaging_shortage':
-        return (
-          <Space direction="vertical" style={{ width: '100%' }}>
-            <div>
-              <Text strong>Товар:</Text> <Text>{alert.product_name || `ID: ${alert.product_id}`}</Text>
-            </div>
-            <div>
-              <Text strong>Требуется:</Text> {alert.required_qty} ед.
-            </div>
-            <div>
-              <Text strong>Доступно:</Text> {alert.available_qty} ед.
-            </div>
-            <div>
-              <Text strong type="danger">Нехватка:</Text> {alert.shortage_qty} ед.
-            </div>
-            {alert.recommendations?.sale_id && (
-              <div>
-                <Text strong>Заказ №{alert.recommendations.sale_id}</Text>
-              </div>
-            )}
-          </Space>
-        );
       
       case 'no_price':
         return (
@@ -268,7 +244,7 @@ const AlertsPage: React.FC = () => {
           const oldPrice = alert.recommendations?.old_price;
           const newPrice = alert.recommendations?.new_price;
           shortText = `${oldPrice || '—'} ₽ → ${newPrice} ₽`;
-        } else if (alert.alert_type === 'packaging_shortage' || alert.alert_type === 'low_stock') {
+        } else if (alert.alert_type === 'low_stock') {
           shortText = `Нехватка: ${alert.shortage_qty} ед.`;
         } else if (alert.alert_type === 'no_price') {
           shortText = `Первая цена: ${alert.required_qty} ₽`;

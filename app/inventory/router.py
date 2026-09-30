@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 
-
 from sqlalchemy import select, desc, func
 
 from app.core.database import get_db
@@ -12,10 +11,7 @@ from app.users.models import User
 
 from app.inventory.schemas import (PurchaseOrderConfirm,
     BatchCreate, BatchOut, BatchListOut, StockOut, StockByProduct,
-    PackagingUnitCreate, PackagingUnitUpdate, PackagingUnitOut, PackagingUnitListOut,
-    PackagingOpeningCreate, PackagingOpeningUpdate, PackagingOpeningOut, PackagingOpeningListOut,
-    PackagingConsumptionCreate, PackagingConsumptionOut, PackagingConsumptionListOut,
-    PackagingAdjustmentOut, PackagingAdjustmentListOut,
+
     ReceiptCreate,
     WriteOffCreate, WriteOffOut, WriteOffListOut, WriteOffUpdate,
     PurchaseOrderCreate, PurchaseOrderUpdate, PurchaseOrderOut, PurchaseOrderListOut,
@@ -24,13 +20,10 @@ from app.inventory.schemas import (PurchaseOrderConfirm,
 )
 
 from app.inventory.service import BatchService, StockService, PurchaseOrderService
-from app.inventory.packaging_service import PackagingService  
+  
 from app.inventory.capability_service import CapabilityService
 
-
 router = APIRouter(prefix="/inventory", tags=["inventory"])
-
-
 
 # ============ BATCHES (Партии) ============
 @router.post("/batches", response_model=BatchOut, status_code=201)
@@ -44,7 +37,6 @@ async def create_batch(
         return await BatchService.create(db, data, current_user.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @router.get("/batches", response_model=BatchListOut)
 async def list_batches(
@@ -61,7 +53,6 @@ async def list_batches(
     )
     return BatchListOut(total=total, items=items)
 
-
 @router.get("/batches/{batch_id}", response_model=BatchOut)
 async def get_batch(
     batch_id: int,
@@ -72,7 +63,6 @@ async def get_batch(
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     return batch
-
 
 # ============ RECEIPT (Приёмка товара) ============
 @router.post("/receipts", response_model=dict, status_code=201)
@@ -91,8 +81,6 @@ async def create_receipt(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
-
 # ============ WRITE-OFF (Списание) ============
 @router.post("/write-offs", response_model=WriteOffOut, status_code=201)
 async def create_write_off(
@@ -105,7 +93,6 @@ async def create_write_off(
         return await BatchService.create_write_off(db, data, current_user.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @router.get("/write-offs", response_model=WriteOffListOut)
 async def list_write_offs(
@@ -157,7 +144,6 @@ async def get_stock_all(
     """Возвращает текущие остатки по всем товарам."""
     return await StockService.get_all_with_details(db)
 
-
 @router.get("/stock/{product_id}", response_model=StockOut)
 async def get_stock_by_product(
     product_id: int,
@@ -169,168 +155,7 @@ async def get_stock_by_product(
         raise HTTPException(status_code=404, detail="Stock not found for this product")
     return stock
 
-
 # ============ PACKAGING UNITS ============
-
-@router.post("/packaging/units", response_model=PackagingUnitOut, status_code=201)
-async def create_packaging_unit(
-    data: PackagingUnitCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Создание единицы упаковки (рулона/пачки)"""
-    unit = await PackagingService.create_unit(db, data.model_dump())
-    return unit
-
-
-@router.get("/packaging/units", response_model=PackagingUnitListOut)
-async def list_packaging_units(
-    is_active: Optional[bool] = None,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Список единиц упаковки"""
-    items, total = await PackagingService.list_units(db, is_active, skip, limit)
-    return PackagingUnitListOut(total=total, items=items)
-
-
-@router.get("/packaging/units/{unit_id}", response_model=PackagingUnitOut)
-async def get_packaging_unit(
-    unit_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Получение единицы упаковки по ID"""
-    unit = await PackagingService.get_unit(db, unit_id)
-    if not unit:
-        raise HTTPException(status_code=404, detail="Единица упаковки не найдена")
-    return unit
-
-
-@router.patch("/packaging/units/{unit_id}", response_model=PackagingUnitOut)
-async def update_packaging_unit(
-    unit_id: int,
-    data: PackagingUnitUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Обновление единицы упаковки"""
-    unit = await PackagingService.update_unit(db, unit_id, data.model_dump(exclude_unset=True))
-    if not unit:
-        raise HTTPException(status_code=404, detail="Единица упаковки не найдена")
-    return unit
-
-
-# ============ PACKAGING OPENINGS ============
-
-@router.post("/packaging/openings", response_model=PackagingOpeningOut, status_code=201)
-async def open_packaging_unit(
-    data: PackagingOpeningCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Открытие рулона/пачки"""
-    try:
-        opening = await PackagingService.open_unit(
-            db,
-            packaging_unit_id=data.packaging_unit_id,
-            initial_qty=data.initial_qty,
-            opened_by=current_user.id,
-            notes=data.notes
-        )
-        return opening
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.get("/packaging/openings", response_model=PackagingOpeningListOut)
-async def list_packaging_openings(
-    status: Optional[str] = None,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Список открытий рулонов"""
-    items, total = await PackagingService.list_openings(db, status, skip, limit)
-    return PackagingOpeningListOut(total=total, items=items)
-
-
-@router.get("/packaging/openings/{opening_id}", response_model=PackagingOpeningOut)
-async def get_packaging_opening(
-    opening_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Получение открытия по ID"""
-    opening = await PackagingService.get_opening(db, opening_id)
-    if not opening:
-        raise HTTPException(status_code=404, detail="Открытие не найдено")
-    return opening
-
-
-@router.patch("/packaging/openings/{opening_id}/close", response_model=PackagingOpeningOut)
-async def close_packaging_opening(
-    opening_id: int,
-    data: PackagingOpeningUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Закрытие рулона с расчётом коэффициента корректировки"""
-    if data.final_qty is None:
-        raise HTTPException(status_code=400, detail="final_qty обязателен для закрытия")
-    
-    try:
-        opening, adjustment = await PackagingService.close_opening(
-            db,
-            opening_id=opening_id,
-            final_qty=data.final_qty,
-            notes=data.notes
-        )
-        return opening
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# ============ PACKAGING CONSUMPTION ============
-
-@router.post("/packaging/consumption", response_model=PackagingConsumptionOut, status_code=201)
-async def record_packaging_consumption(
-    data: PackagingConsumptionCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Запись нормативного расхода упаковки"""
-    try:
-        consumption = await PackagingService.record_consumption(
-            db,
-            opening_id=data.opening_id,
-            product_id=data.product_id,
-            normative_qty=data.normative_qty,
-            normative_unit=data.normative_unit,
-            sale_id=data.sale_id
-        )
-        return consumption
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.get("/packaging/consumption", response_model=PackagingConsumptionListOut)
-async def list_packaging_consumption(
-    opening_id: Optional[int] = None,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Список записей нормативного расхода"""
-    items, total = await PackagingService.list_consumption(db, opening_id, skip, limit)
-    return PackagingConsumptionListOut(total=total, items=items)
-
-
-# ============ CAPABILITY (Возможности сборки) ============
 
 @router.get("/capability", response_model=dict)
 async def get_capability_report(
@@ -368,21 +193,6 @@ async def sync_capability_alerts(
     
 # ============ PACKAGING ADJUSTMENTS ============
 
-@router.get("/packaging/adjustments", response_model=PackagingAdjustmentListOut)
-async def list_packaging_adjustments(
-    is_anomaly: Optional[bool] = None,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Список корректировок себестоимости"""
-    items, total = await PackagingService.list_adjustments(db, is_anomaly, skip, limit)
-    return PackagingAdjustmentListOut(total=total, items=items)
-
-
-# ============ PURCHASE ORDERS (Заказы поставщикам) ============
-
 @router.post("/purchase-orders", response_model=PurchaseOrderOut, status_code=201)
 async def create_purchase_order(
     data: PurchaseOrderCreate,
@@ -395,7 +205,6 @@ async def create_purchase_order(
         return await PurchaseOrderService._format_order(order)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @router.get("/purchase-orders", response_model=PurchaseOrderListOut)
 async def list_purchase_orders(
@@ -450,7 +259,6 @@ async def list_purchase_orders(
     
     return {"total": total, "items": formatted_orders}
 
-
 @router.get("/purchase-orders/{order_id}", response_model=PurchaseOrderOut)
 async def get_purchase_order(
     order_id: int,
@@ -462,7 +270,6 @@ async def get_purchase_order(
     if not order:
         raise HTTPException(status_code=404, detail="Заказ не найден")
     return await PurchaseOrderService._format_order(order)
-
 
 @router.put("/purchase-orders/{order_id}", response_model=PurchaseOrderOut)
 async def update_purchase_order(
@@ -478,7 +285,6 @@ async def update_purchase_order(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @router.post("/purchase-orders/{order_id}/confirm", response_model=PurchaseOrderOut)
 async def confirm_purchase_order(
     order_id: int,
@@ -493,7 +299,6 @@ async def confirm_purchase_order(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @router.post("/purchase-orders/{order_id}/cancel", response_model=PurchaseOrderOut)
 async def cancel_purchase_order(
     order_id: int,
@@ -506,7 +311,6 @@ async def cancel_purchase_order(
         return await PurchaseOrderService._format_order(order)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @router.post("/purchase-orders/{order_id}/receive", response_model=PurchaseOrderReceiptOut)
 async def receive_purchase_order(
@@ -521,7 +325,6 @@ async def receive_purchase_order(
         return await PurchaseOrderService._format_receipt(receipt)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @router.post("/purchase-orders/calculate-from-bouquets", response_model=BouquetCalculationResponse)
 async def calculate_from_bouquets(
@@ -538,5 +341,4 @@ async def calculate_from_bouquets(
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 

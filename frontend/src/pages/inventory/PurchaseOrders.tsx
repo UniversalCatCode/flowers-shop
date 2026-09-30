@@ -567,27 +567,6 @@ const PurchaseOrdersPage: React.FC = () => {
                               </Form.Item>
                             </Space>
 
-                            {prodType === 'packaging' && (
-                              <Space size="middle" style={{ marginTop: 8 }}>
-                                <Form.Item {...restField} name={[name, 'unit_type']} label="Тип упаковки" initialValue="roll" style={{ marginBottom: 0 }}>
-                                  <Select style={{ width: 120 }}>
-                                    <Option value="roll">Рулон</Option>
-                                    <Option value="pack">Пачка</Option>
-                                    <Option value="box">Коробка</Option>
-                                  </Select>
-                                </Form.Item>
-                                <Form.Item {...restField} name={[name, 'base_quantity']} label="Объём в ед." style={{ marginBottom: 0 }}>
-                                  <InputNumber min={1} style={{ width: 100 }} placeholder="100" />
-                                </Form.Item>
-                                <Form.Item {...restField} name={[name, 'base_unit']} label="Ед. измерения" initialValue="piece" style={{ marginBottom: 0 }}>
-                                  <Select style={{ width: 100 }}>
-                                    <Option value="meter">метров</Option>
-                                    <Option value="piece">штук</Option>
-                                    <Option value="kg">кг</Option>
-                                  </Select>
-                                </Form.Item>
-                              </Space>
-                            )}
 
                             {prodType === 'flower' && (
                               <Form.Item

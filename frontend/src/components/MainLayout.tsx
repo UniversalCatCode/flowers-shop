@@ -81,7 +81,6 @@ const MainLayout: React.FC = () => {
         { key: '/inventory/receipts/create', label: 'Приёмка товара' },
         { key: '/inventory/purchase-orders', label: 'Заказы поставщикам' },
         { key: '/inventory/batches', label: 'Партии' },
-        { key: '/inventory/packaging', label: 'Упаковка' },
         { key: '/inventory/write-offs', label: 'Списания' },
       ],
     },
