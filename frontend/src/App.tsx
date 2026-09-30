@@ -10,7 +10,6 @@ import ProductsPage from './pages/catalog/Products';
 import BatchesPage from './pages/inventory/Batches';
 import RecipesPage from './pages/catalog/Recipes';
 import OrdersPage from './pages/sales/Orders';
-import ReceiptCreatePage from './pages/inventory/ReceiptCreate';
 import SuppliersPage from './pages/catalog/Suppliers';
 import WriteOffsPage from './pages/inventory/WriteOffs';
 import DashboardPage from './pages/Dashboard';
@@ -51,7 +50,6 @@ const App: React.FC = () => {
             <Route path="inventory/batches" element={<BatchesPage />} />
             <Route path="catalog/recipes" element={<RecipesPage />} />
             <Route path="sales/orders" element={<OrdersPage />} />
-            <Route path="inventory/receipts/create" element={<ReceiptCreatePage />} />
             <Route path="catalog/suppliers" element={<SuppliersPage />} />
             <Route path="inventory/write-offs" element={<WriteOffsPage />} />
             <Route path="inventory/purchase-orders" element={<PurchaseOrdersPage />} />

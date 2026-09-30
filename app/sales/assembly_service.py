@@ -218,7 +218,6 @@ class OrderAssemblyService:
                 components_to_process.append((product, item.quantity))
 
             # 3. Списание компонентов
-            packaging_warnings = []  # Собираем предупреждения о норме
             for comp_product, comp_qty in components_to_process:
                 try:
                     if comp_product.product_type == 'flower':
@@ -226,22 +225,16 @@ class OrderAssemblyService:
                             db, comp_product.id, comp_qty, sale.id, item.id, user_id
                         )
                     elif comp_product.product_type == 'packaging':
-                        result = await OrderAssemblyService._deduct_packaging(
+                        await OrderAssemblyService._deduct_packaging(
                             db, comp_product.id, comp_qty, sale.id, user_id
                         )
-                        if result and result.get("norm_reached"):
-                            packaging_warnings.append(result)
                     elif comp_product.product_type == 'consumable':
                         await OrderAssemblyService._deduct_consumable(
                             db, comp_product.id, comp_qty, sale.id, user_id
                         )
                 except ValueError as e:
                     error_msg = str(e)
-                    # Специальные ошибки упаковки — пробрасываем как есть для UI
-                    if error_msg.startswith('PACKAGING_'):
-                        await db.rollback()
-                        raise
-                    # Остальные ошибки тоже пробрасываем
+                    # Ошибки пробрасываем
                     await db.rollback()
                     raise
 
@@ -255,14 +248,6 @@ class OrderAssemblyService:
 
         await db.commit()
         await db.refresh(sale)
-        
-        # Если были предупреждения о норме упаковки — добавляем в ответ
-        if packaging_warnings:
-            # Возвращаем специальный объект вместо Sale
-            raise ValueError(
-                f"PACKAGING_NORM_REACHED|{packaging_warnings[0]['opening_id']}|"
-                f"Нормативный расход достигнут. Подтвердите закрытие рулона."
-            )
         
         return sale
 

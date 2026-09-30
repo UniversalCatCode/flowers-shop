@@ -50,25 +50,8 @@ class StockByProduct(BaseModel):
 
 # ============ PACKAGING UNITS ============
 
-class ReceiptItemCreate(BaseModel):
-    product_id: int
-    quantity: Decimal = Field(..., gt=0, decimal_places=2)
-    purchase_price: Decimal = Field(..., ge=0, decimal_places=2)
-    # Для упаковки: тип и базовое количество
-    unit_type: Optional[str] = None  # 'roll', 'pack', 'box'
-    base_quantity: Optional[Decimal] = None  # например, 10 метров в рулоне
-    base_unit: Optional[str] = None  # 'meter', 'piece', 'stem'
-    received_quality_pct: Optional[Decimal] = None  # процент годного (для аналитики)
-    notes: Optional[str] = None
 
-class ReceiptCreate(BaseModel):
-    supplier_id: int
-    receipt_number: Optional[str] = None  # автогенерируется, если не указан
-    received_at: Optional[datetime] = None  # по умолчанию now
-    items: List[ReceiptItemCreate] = Field(..., min_length=1)
-    notes: Optional[str] = None
 
-# ============ WRITE-OFF (Списание) ============
 class WriteOffCreate(BaseModel):
     batch_id: int
     quantity: Decimal = Field(..., gt=0, decimal_places=2)
@@ -215,11 +198,6 @@ class PurchaseOrderReceiptItemCreate(BaseModel):
     product_id: int
     quantity: Decimal = Field(..., gt=0, decimal_places=2)
     unit_price: Optional[Decimal] = Field(None, ge=0, decimal_places=2)  # Если None — берём из заказа
-    
-    # Поля для упаковки (product_type == 'packaging')
-    unit_type: Optional[str] = Field(None, pattern='^(roll|pack|box)$')
-    base_quantity: Optional[Decimal] = Field(None, gt=0)
-    base_unit: Optional[str] = Field(None, pattern='^(meter|piece|kg)$')
     
     # Качество для цветов (product_type == 'flower')
     received_quality_pct: Optional[int] = Field(None, ge=0, le=100)

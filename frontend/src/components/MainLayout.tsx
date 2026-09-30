@@ -77,9 +77,7 @@ const MainLayout: React.FC = () => {
       key: '/inventory',
       icon: <ShoppingOutlined />,
       label: 'Склад',
-      children: [
-        { key: '/inventory/receipts/create', label: 'Приёмка товара' },
-        { key: '/inventory/purchase-orders', label: 'Заказы поставщикам' },
+      children: [        { key: '/inventory/purchase-orders', label: 'Заказы поставщикам' },
         { key: '/inventory/batches', label: 'Партии' },
         { key: '/inventory/write-offs', label: 'Списания' },
       ],

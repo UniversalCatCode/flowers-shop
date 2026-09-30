@@ -67,181 +67,6 @@ class BatchService:
         return batch
 
     @staticmethod
-    async def create_receipt(
-        db: AsyncSession, 
-        data: 'ReceiptCreate',  # type: ignore
-        user_id: int
-    ) -> dict:
-        """
-        Единая приёмка товара от поставщика.
-        Автоматически создаёт:
-        - batches для товаров типа 'flower'
-        - stock для товаров типа 'packaging' и 'consumable'
-        """
-        from app.inventory.models import Movement
-        from app.catalog.models import Supplier
-        
-        # Проверка поставщика
-        supplier = await db.get(Supplier, data.supplier_id)
-        if not supplier:
-            raise ValueError(f"Поставщик с id={data.supplier_id} не найден")
-        
-        received_at = data.received_at or datetime.utcnow()
-        receipt_number = data.receipt_number or f"RCPT-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-        
-        created_batches = []
-        skipped_items = []
-        
-        for item in data.items:
-            product = await db.get(Product, item.product_id)
-            if not product:
-                skipped_items.append(f"Товар id={item.product_id} не найден")
-                continue
-            
-            # === ПРОВЕРКА ЦЕНЫ И СОЗДАНИЕ АЛЕРТОВ ===
-            old_price = product.purchase_price
-            new_price = item.purchase_price
-            price_changed = False
-            alert_message = ""
-
-            if old_price is None:
-                product.purchase_price = new_price
-                price_changed = True
-                alert_message = f"Установлена первая цена закупки: {new_price} ₽"
-            elif new_price > old_price:
-                product.purchase_price = new_price
-                price_changed = True
-                
-                stmt_bouquets = (
-                    select(CatalogProduct.name)
-                    .where(
-                        CatalogProduct.recipe_id.in_(
-                            select(RecipeItem.recipe_id)
-                            .where(RecipeItem.product_id == product.id)
-                        )
-                    )
-                    .distinct()
-                )
-                bouquet_result = await db.execute(stmt_bouquets)
-                affected_bouquets = [row[0] for row in bouquet_result.all()]
-                
-                bouquets_str = ", ".join(affected_bouquets) if affected_bouquets else "нет затрагиваемых букетов"
-                alert_message = f"Цена закупки выросла с {old_price} ₽ до {new_price} ₽. Затрагивает букеты: {bouquets_str}. Проверьте цену продажи!"
-
-            if price_changed:
-                await db.flush()
-                await AlertService.create_alert(
-                    db=db,
-                    alert_type='price_increase',
-                    product_id=product.id,
-                    required_qty=new_price,
-                    available_qty=old_price or 0,
-                    recommendations={
-                        'old_price': float(old_price) if old_price else None,
-                        'new_price': float(new_price),
-                        'affected_bouquets': affected_bouquets if 'affected_bouquets' in locals() else []
-                    }
-                )
-
-            if product.product_type == 'flower':
-                # === ЦВЕТЫ: создаём партию ===
-                batch = Batch(
-                    product_id=item.product_id,
-                    supplier_id=data.supplier_id,
-                    batch_number=receipt_number,
-                    purchase_price=item.purchase_price,
-                    received_at=received_at,
-                    initial_qty=item.quantity,
-                    current_qty=item.quantity,
-                    status='active',
-                    received_quality_pct=item.received_quality_pct,
-                    notes=item.notes
-                )
-                db.add(batch)
-                await db.flush()
-                
-                stock = await db.scalar(
-                    select(Stock).where(Stock.product_id == item.product_id)
-                )
-                if stock:
-                    stock.quantity += item.quantity
-                    stock.updated_at = datetime.utcnow()
-                else:
-                    stock = Stock(product_id=item.product_id, quantity=item.quantity)
-                    db.add(stock)
-                
-                movement = Movement(
-                    batch_id=batch.id,
-                    movement_type='receipt',
-                    quantity=item.quantity,
-                    reason=f'Приёмка {receipt_number}',
-                    created_by=user_id
-                )
-                db.add(movement)
-                created_batches.append(batch)
-                
-            elif product.product_type == 'packaging':
-                # === УПАКОВКА: просто увеличиваем stock (как consumable) ===
-                stock = await db.scalar(
-                    select(Stock).where(Stock.product_id == item.product_id)
-                )
-                if stock:
-                    stock.quantity += item.quantity
-                    stock.updated_at = datetime.utcnow()
-                else:
-                    stock = Stock(product_id=item.product_id, quantity=item.quantity)
-                    db.add(stock)
-                
-                movement = Movement(
-                    product_id=item.product_id,
-                    batch_id=None,
-                    movement_type='receipt',
-                    quantity=item.quantity,
-                    reason=f'Приёмка {receipt_number} (Упаковка)',
-                    created_by=user_id
-                )
-                db.add(movement)
-                
-            elif product.product_type == 'bouquet':
-                skipped_items.append(f"Букет '{product.name}' не принимается на склад (создаётся из компонентов)")
-
-            elif product.product_type == 'consumable':
-                # === ПРОЧЕЕ: просто увеличиваем stock ===
-                stock = await db.scalar(
-                    select(Stock).where(Stock.product_id == item.product_id)
-                )
-                if stock:
-                    stock.quantity += item.quantity
-                    stock.updated_at = datetime.utcnow()
-                else:
-                    stock = Stock(product_id=item.product_id, quantity=item.quantity)
-                    db.add(stock)
-                
-                movement = Movement(
-                    product_id=item.product_id,
-                    batch_id=None,
-                    movement_type='receipt',
-                    quantity=item.quantity,
-                    reason=f'Приёмка {receipt_number} (Прочее)',
-                    created_by=user_id
-                )
-                db.add(movement)
-
-            else:
-                skipped_items.append(f"Неизвестный тип товара '{product.product_type}' для '{product.name}'")
-        
-        await db.commit()
-        
-        return {
-            "receipt_number": receipt_number,
-            "supplier": supplier.name,
-            "received_at": received_at,
-            "batches_created": len(created_batches),
-            "skipped": skipped_items,
-            "notes": data.notes
-        }
-
-    @staticmethod
     async def _create_stock_entry(
         db: AsyncSession,
         product_id: int,
@@ -852,6 +677,32 @@ class PurchaseOrderService:
 # ============ МЕТОДЫ ФОРМАТИРОВАНИЯ И РАСЧЁТА ============
 
     @staticmethod
+    async def _format_receipt(receipt) -> dict:
+        """Форматирует акт приёмки для ответа."""
+        receipt_items = []
+        for ri in receipt.items:
+            receipt_items.append({
+                "id": ri.id,
+                "product_id": ri.product_id,
+                "product_name": ri.product.name if ri.product else None,
+                "quantity": ri.quantity,
+                "unit_price": ri.unit_price,
+                "notes": ri.notes
+            })
+        
+        return {
+            "id": receipt.id,
+            "purchase_order_id": receipt.purchase_order_id,
+            "receipt_number": receipt.receipt_number,
+            "received_at": receipt.received_at,
+            "received_by": receipt.received_by,
+            "receiver_name": receipt.receiver.full_name if receipt.receiver else None,
+            "status": receipt.status,
+            "notes": receipt.notes,
+            "items": receipt_items
+        }
+
+    @staticmethod
     async def _format_order(order) -> dict:
         """Форматирует заказ для вывода"""
         items = []
@@ -923,32 +774,6 @@ class PurchaseOrderService:
             "is_fully_received": is_fully_received,
             "items": items,
             "receipts": receipts
-        }
-    
-    @staticmethod
-    async def _format_receipt(receipt) -> dict:
-        """Форматирует акт приёмки для вывода"""
-        items = []
-        for ri in receipt.items:
-            items.append({
-                "id": ri.id,
-                "product_id": ri.product_id,
-                "product_name": ri.product.name if ri.product else None,
-                "quantity": ri.quantity,
-                "unit_price": ri.unit_price,
-                "notes": ri.notes
-            })
-        
-        return {
-            "id": receipt.id,
-            "purchase_order_id": receipt.purchase_order_id,
-            "receipt_number": receipt.receipt_number,
-            "received_at": receipt.received_at,
-            "received_by": receipt.received_by,
-            "receiver_name": receipt.receiver.full_name if receipt.receiver else None,
-            "status": receipt.status,
-            "notes": receipt.notes,
-            "items": items
         }
     
     @staticmethod

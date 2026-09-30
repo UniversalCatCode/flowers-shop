@@ -11,8 +11,6 @@ from app.users.models import User
 
 from app.inventory.schemas import (PurchaseOrderConfirm,
     BatchCreate, BatchOut, BatchListOut, StockOut, StockByProduct,
-
-    ReceiptCreate,
     WriteOffCreate, WriteOffOut, WriteOffListOut, WriteOffUpdate,
     PurchaseOrderCreate, PurchaseOrderUpdate, PurchaseOrderOut, PurchaseOrderListOut,
     PurchaseOrderStatusUpdate, PurchaseOrderReceiptCreate, PurchaseOrderReceiptOut,
@@ -65,23 +63,6 @@ async def get_batch(
     return batch
 
 # ============ RECEIPT (Приёмка товара) ============
-@router.post("/receipts", response_model=dict, status_code=201)
-async def create_receipt(
-    data: ReceiptCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("inventory.receipts.write")),
-):
-    """
-    Единая приёмка товара от поставщика.
-    Автоматически создаёт партии для цветов и рулоны/пачки для упаковки.
-    """
-    try:
-        result = await BatchService.create_receipt(db, data, current_user.id)
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-# ============ WRITE-OFF (Списание) ============
 @router.post("/write-offs", response_model=WriteOffOut, status_code=201)
 async def create_write_off(
     data: WriteOffCreate,

@@ -366,9 +366,7 @@ const DashboardPage: React.FC = () => {
         <Col xs={24} md={10}>
           <Card title="Быстрые действия">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {[
-                { title: 'Создать приёмку товара', link: '/inventory/receipts/create', icon: <ToolOutlined /> },
-                { title: 'Новый заказ', link: '/sales/orders', icon: <ShoppingOutlined /> },
+              {[                { title: 'Новый заказ', link: '/sales/orders', icon: <ShoppingOutlined /> },
                 { title: 'Управление поставщиками', link: '/catalog/suppliers', icon: <CheckCircleOutlined /> },
               ].map((item, idx) => (
                 <div 

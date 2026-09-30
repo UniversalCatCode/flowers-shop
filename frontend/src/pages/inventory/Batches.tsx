@@ -1,15 +1,12 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { 
-  Table, Button, Space, Tag, message, Card, Modal, Form, 
-  Input, Select, TreeSelect, InputNumber, DatePicker, Typography, Descriptions
+  Table, Button, Space, Tag, message, Card, Modal, Typography, Descriptions
 } from 'antd';
-import { PlusOutlined, ReloadOutlined, EyeOutlined } from '@ant-design/icons';
+import { ReloadOutlined, EyeOutlined } from '@ant-design/icons';
 import apiClient from '../../api/client';
 import { Product, Supplier, Category } from '../../types/api';
 import dayjs from 'dayjs';
 
-const { Option } = Select;
-const { TextArea } = Input;
 const { Text } = Typography;
 
 interface Batch {
@@ -32,94 +29,11 @@ interface Batch {
 const BatchesPage: React.FC = () => {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(false);
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [form] = Form.useForm();
-
-  // Построение дерева категорий
-  const buildCategoryTree = (cats: Category[]) => {
-    const sorted = [...cats].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-    const catMap = new Map<number, any>();
-    sorted.forEach(cat => {
-      catMap.set(cat.id, { 
-        title: cat.name, 
-        value: `cat-${cat.id}`,
-        key: `cat-${cat.id}`,
-        selectable: false, // Категорию нельзя выбрать
-        children: [] 
-      });
-    });
-
-    const tree: any[] = [];
-    sorted.forEach(cat => {
-      const node = catMap.get(cat.id)!;
-      if (cat.parent_id && catMap.has(cat.parent_id)) {
-        catMap.get(cat.parent_id)!.children.push(node);
-      } else {
-        tree.push(node);
-      }
-    });
-    return tree;
-  };
-
-  // Построение дерева товаров: категории как родители, товары как листья
-  const productTreeData = useMemo(() => {
-    const categoryTree = buildCategoryTree(categories);
-    const catMap = new Map<string, any>();
-    
-    // Собираем все узлы категорий в карту
-    const collectNodes = (nodes: any[]) => {
-      nodes.forEach(node => {
-        catMap.set(node.value, node);
-        if (node.children) collectNodes(node.children);
-      });
-    };
-    collectNodes(categoryTree);
-
-    // Добавляем товары как листья в соответствующие категории
-    products.forEach(prod => {
-      const productNode = {
-        title: `${prod.name} (${prod.sku})`,
-        value: prod.id,
-        key: `prod-${prod.id}`,
-        selectable: true,
-        // Кастомные данные для поиска
-        searchText: `${prod.name} ${prod.sku}`.toLowerCase(),
-      };
-
-      const parentCatKey = `cat-${prod.category_id}`;
-      if (catMap.has(parentCatKey)) {
-        catMap.get(parentCatKey)!.children.push(productNode);
-      } else {
-        // Если категория не найдена (товар без категории), добавляем в корень
-        categoryTree.push(productNode);
-      }
-    });
-
-    // Сортируем товары внутри каждой категории по названию
-    const sortChildren = (nodes: any[]): any[] => {
-      return nodes.map(node => {
-        if (node.children && node.children.length > 0) {
-          const sortedChildren = [...node.children].sort((a, b) => {
-            const aIsCat = String(a.value).startsWith('cat-');
-            const bIsCat = String(b.value).startsWith('cat-');
-            if (aIsCat && !bIsCat) return -1;
-            if (!aIsCat && bIsCat) return 1;
-            return String(a.title).localeCompare(String(b.title), 'ru');
-          });
-          return { ...node, children: sortChildren(sortedChildren) };
-        }
-        return node;
-      });
-    };
-    
-
-    return sortChildren(categoryTree);
-  }, [products, categories]);
 
   // Загрузка данных
   const fetchData = async () => {
@@ -153,29 +67,6 @@ const BatchesPage: React.FC = () => {
     fetchData();
   }, []);
 
-  const handleCreate = async (values: any) => {
-    try {
-      const payload = {
-        ...values,
-        received_at: values.received_at.toISOString(),
-        expires_at: values.expires_at ? values.expires_at.toISOString() : null,
-      };
-
-      await apiClient.post<Batch>('/inventory/batches', payload);
-      message.success('Партия успешно создана!');
-      setIsModalOpen(false);
-      form.resetFields();
-      fetchData();
-    } catch (error: any) {
-      const detail = error.response?.data?.detail;
-      if (Array.isArray(detail)) {
-        message.error(detail.map((e: any) => e.msg).join(', '));
-      } else {
-        message.error(detail || 'Ошибка при создании партии');
-      }
-    }
-  };
-
   const showBatchDetails = (batch: Batch) => {
     setSelectedBatch(batch);
     setIsDetailModalOpen(true);
@@ -184,14 +75,6 @@ const BatchesPage: React.FC = () => {
   const formatNumber = (val: any, decimals: number = 2) => {
     const num = Number(val);
     return isNaN(num) ? '—' : num.toFixed(decimals);
-  };
-
-  // Кастомный фильтр для TreeSelect: ищет и в названии, и в SKU
-  const filterProductNode = (inputValue: string, treeNode: any) => {
-    const searchText = inputValue.toLowerCase();
-    const nodeText = String(treeNode.title || '').toLowerCase();
-    const nodeSearchText = treeNode.searchText || '';
-    return nodeText.includes(searchText) || nodeSearchText.includes(searchText);
   };
 
   const columns = [
@@ -289,14 +172,9 @@ const BatchesPage: React.FC = () => {
       <Card 
         title="Партии товаров (Приходные накладные)" 
         extra={
-          <Space>
-            <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
-              Обновить
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsModalOpen(true)}>
-              Оформить приход
-            </Button>
-          </Space>
+          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
+            Обновить
+          </Button>
         }
       >
         <Table 
@@ -307,140 +185,6 @@ const BatchesPage: React.FC = () => {
           pagination={{ pageSize: 15, showSizeChanger: true }}
         />
       </Card>
-
-      {/* Модальное окно создания партии */}
-      <Modal
-        title="Оформить приходную накладную"
-        open={isModalOpen}
-        onCancel={() => {
-          setIsModalOpen(false);
-          form.resetFields();
-        }}
-        footer={null}
-        width={650}
-      >
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={handleCreate}
-          initialValues={{ 
-            received_at: dayjs(),
-            initial_qty: 1,
-          }}
-        >
-          <Form.Item 
-            name="product_id" 
-            label="Товар" 
-            rules={[{ required: true, message: 'Выберите товар' }]}
-            extra="Начните вводить название или SKU для поиска"
-          >
-            <TreeSelect
-              showSearch
-              style={{ width: '100%' }}
-              styles={{ popup: { root: { maxHeight: 400, overflow: 'auto' } } }}
-              placeholder="Выберите товар или начните вводить для поиска..."
-              allowClear
-              treeDefaultExpandAll
-              treeData={productTreeData}
-              treeNodeFilterProp="title"
-              filterTreeNode={filterProductNode}
-              listHeight={400}
-              showCheckedStrategy={TreeSelect.SHOW_CHILD}
-            />
-          </Form.Item>
-
-          <Form.Item name="supplier_id" label="Поставщик">
-            <Select 
-              placeholder="Выберите поставщика (необязательно)" 
-              allowClear
-              showSearch 
-              optionFilterProp="children"
-            >
-              {suppliers.map(sup => (
-                <Option key={sup.id} value={sup.id}>{sup.name}</Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item name="batch_number" label="Номер партии">
-            <Input placeholder="Например: BATCH-2026-001" />
-          </Form.Item>
-
-          <Space style={{ width: '100%' }} size="large">
-            <Form.Item 
-              name="purchase_price" 
-              label="Цена закупки (₽)" 
-              rules={[{ required: true, message: 'Введите цену' }]}
-              style={{ flex: 1 }}
-            >
-              <InputNumber 
-                min={0} 
-                step={0.01}
-                style={{ width: '100%' }} 
-                placeholder="150.00"
-              />
-            </Form.Item>
-
-            <Form.Item 
-              name="initial_qty" 
-              label="Количество поступило" 
-              rules={[{ required: true, message: 'Введите количество' }]}
-              style={{ flex: 1 }}
-            >
-              <InputNumber 
-                min={0.01}
-                step={1}
-                style={{ width: '100%' }} 
-                placeholder="100"
-              />
-            </Form.Item>
-          </Space>
-
-          <Form.Item 
-            name="received_at" 
-            label="Дата поступления" 
-            rules={[{ required: true, message: 'Выберите дату' }]}
-          >
-            <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
-          </Form.Item>
-
-          <Form.Item name="expires_at" label="Срок годности">
-            <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
-          </Form.Item>
-
-          <Form.Item 
-            name="quality_score" 
-            label="Оценка качества (0.0 - 1.0)"
-            extra="1.0 = отличное качество, 0.5 = среднее, 0.1 = плохое"
-          >
-            <InputNumber 
-              min={0} 
-              max={1} 
-              step={0.1}
-              style={{ width: '100%' }} 
-              placeholder="0.9"
-            />
-          </Form.Item>
-
-          <Form.Item name="notes" label="Примечания">
-            <TextArea rows={2} placeholder="Дополнительная информация о партии" />
-          </Form.Item>
-
-          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
-            <Space>
-              <Button onClick={() => {
-                setIsModalOpen(false);
-                form.resetFields();
-              }}>
-                Отмена
-              </Button>
-              <Button type="primary" htmlType="submit" loading={loading}>
-                Создать партию
-              </Button>
-            </Space>
-          </Form.Item>
-        </Form>
-      </Modal>
 
       {/* Модальное окно деталей партии */}
       <Modal
