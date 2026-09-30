@@ -48,14 +48,14 @@ class StockByProduct(BaseModel):
     total_quantity: Decimal
     batches_count: int = 0
 
-# ============ PACKAGING UNITS ============
-
+# ============ WRITE OFF ============
 
 
 class WriteOffCreate(BaseModel):
-    batch_id: int
+    batch_id: Optional[int] = None  # Для цветов (партия)
+    product_id: Optional[int] = None  # Для packaging/consumable (без партии)
     quantity: Decimal = Field(..., gt=0, decimal_places=2)
-    reason: str = Field(..., max_length=255)  # Увеличили лимит, чтобы вместить детали
+    reason: str = Field(..., max_length=255)
 
 class WriteOffUpdate(BaseModel):
     reason: Optional[str] = Field(None, max_length=255)
@@ -63,7 +63,9 @@ class WriteOffUpdate(BaseModel):
 class WriteOffOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    batch_id: int
+    batch_id: Optional[int] = None
+    product_id: Optional[int] = None
+    product_name: Optional[str] = None
     quantity: Decimal
     reason: str
     created_by: Optional[int] = None

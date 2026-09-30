@@ -12,7 +12,9 @@ const { RangePicker } = DatePicker;
 
 interface WriteOff {
   id: number;
-  batch_id: number;
+  batch_id: number | null;
+  product_id?: number | null;
+  product_name?: string | null;
   quantity: number;
   reason: string;
   created_by: number | null;
@@ -116,6 +118,7 @@ const WriteOffsPage: React.FC = () => {
       // Режим создания
       setSelectedProductId(null);
       form.resetFields();
+      form.setFieldValue('product_id', undefined);
     }
     setIsModalOpen(true);
   };
@@ -128,7 +131,13 @@ const WriteOffsPage: React.FC = () => {
         });
         message.success('Причина списания обновлена');
       } else {
-        await apiClient.post('/inventory/write-offs', values);
+        // Если партия не выбрана — передаём product_id
+        const payload = { ...values };
+        if (!payload.batch_id && selectedProductId) {
+          payload.product_id = selectedProductId;
+          delete payload.batch_id;
+        }
+        await apiClient.post('/inventory/write-offs', payload);
         message.success('Списание создано');
       }
       setIsModalOpen(false);
@@ -151,7 +160,8 @@ const WriteOffsPage: React.FC = () => {
     return found ? found.color : 'default';
   };
 
-  const getBatchInfo = (batchId: number) => {
+  const getBatchInfo = (batchId: number | null) => {
+    if (!batchId) return '—';
     const batch = batches.find(b => b.id === batchId);
     return batch ? `${batch.product_name} (Партия #${batch.id})` : `Партия #${batchId}`;
   };
@@ -162,9 +172,11 @@ const WriteOffsPage: React.FC = () => {
   const columns = [
     {
       title: 'Партия / Товар',
-      dataIndex: 'batch_id',
-      key: 'batch_id',
-      render: (batchId: number) => getBatchInfo(batchId),
+      key: 'source',
+      render: (_: any, record: WriteOff) => {
+        if (record.batch_id) return getBatchInfo(record.batch_id);
+        return record.product_name || `Товар #${record.product_id}`;
+      },
     },
     {
       title: 'Количество',
@@ -288,25 +300,34 @@ const WriteOffsPage: React.FC = () => {
             </Form.Item>
           )}
 
-          {/* ШАГ 2: Выбор партии */}
-          <Form.Item 
-            name="batch_id" 
-            label={editingWriteOff ? "Партия" : "2. Выберите партию"}
-            rules={[{ required: true, message: 'Выберите партию' }]}
-          >
-            <Select 
-              showSearch 
-              optionFilterProp="children"
-              placeholder={selectedProductId ? "Выберите партию" : "Сначала выберите товар"}
-              disabled={!selectedProductId && !editingWriteOff}
+          {/* ШАГ 2: Выбор партии (только если есть партии у товара) */}
+          {(filteredBatches.length > 0 || editingWriteOff) ? (
+            <Form.Item 
+              name="batch_id" 
+              label={editingWriteOff ? "Партия" : "2. Выберите партию"}
+              rules={[{ required: filteredBatches.length > 0, message: 'Выберите партию' }]}
             >
-              {filteredBatches.map(b => (
-                <Option key={b.id} value={b.id}>
-                  Партия #{b.id} от {dayjs(b.received_at).format('DD.MM.YYYY')} (Остаток: {b.current_qty})
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
+              <Select 
+                showSearch 
+                optionFilterProp="children"
+                placeholder={selectedProductId ? "Выберите партию" : "Сначала выберите товар"}
+                disabled={!selectedProductId && !editingWriteOff}
+                allowClear
+              >
+                {filteredBatches.map(b => (
+                  <Option key={b.id} value={b.id}>
+                    Партия #{b.id} от {dayjs(b.received_at).format('DD.MM.YYYY')} (Остаток: {b.current_qty})
+                  </Option>
+                ))}
+              </Select>
+            </Form.Item>
+          ) : (
+            selectedProductId && (
+              <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+                ℹ️ У этого товара нет партий. Списание будет выполнено из общего остатка.
+              </Typography.Text>
+            )
+          )}
 
           {/* ШАГ 3: Количество (заблокировано при редактировании) */}
           <Form.Item 

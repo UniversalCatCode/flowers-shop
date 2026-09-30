@@ -74,9 +74,6 @@ class BatchService:
         quantity: float,
         purchase_price: float,
         batch_number: str,
-        unit_type: str = None,
-        base_quantity: float = None,
-        base_unit: str = None,
         received_quality_pct: int = None
     ) -> None:
         """
@@ -184,33 +181,54 @@ class BatchService:
         items = list(result.scalars().all())
         return items, total or 0
 
+
     @staticmethod
     async def create_write_off(
         db: AsyncSession, 
         data: WriteOffCreate,
         user_id: int
     ) -> WriteOff:
-        """Создаёт списание товара и обновляет остатки."""
-        # Проверяем, что партия существует
-        batch = await db.get(Batch, data.batch_id)
-        if not batch:
-            raise ValueError(f"Партия с id={data.batch_id} не найдена")
+        """Создаёт списание. Для цветов — через партию, для packaging/consumable — из Stock."""
         
-        # Проверяем, что достаточно остатков
-        if batch.current_qty < data.quantity:
-            raise ValueError(
-                f"Недостаточно остатков в партии. "
-                f"Доступно: {batch.current_qty}, требуется: {data.quantity}"
+        if data.batch_id:
+            # === СПИСАНИЕ ИЗ ПАРТИИ (цветы) ===
+            batch = await db.get(Batch, data.batch_id)
+            if not batch:
+                raise ValueError(f"Партия с id={data.batch_id} не найдена")
+            
+            if batch.current_qty < data.quantity:
+                raise ValueError(
+                    f"Недостаточно остатков в партии. "
+                    f"Доступно: {batch.current_qty}, требуется: {data.quantity}"
+                )
+            
+            batch.current_qty -= data.quantity
+            if batch.current_qty == 0:
+                batch.status = 'depleted'
+            
+            product_id = batch.product_id
+            movement_batch_id = batch.id
+            
+        elif data.product_id:
+            # === СПИСАНИЕ ИЗ STOCK (packaging/consumable) ===
+            stock = await db.scalar(
+                select(Stock).where(Stock.product_id == data.product_id)
             )
+            if not stock or stock.quantity < data.quantity:
+                available = float(stock.quantity) if stock else 0
+                raise ValueError(
+                    f"Недостаточно остатков. Доступно: {available}, требуется: {data.quantity}"
+                )
+            
+            product_id = data.product_id
+            movement_batch_id = None
+            
+        else:
+            raise ValueError("Укажите batch_id (для цветов) или product_id (для упаковки/расходников)")
         
-        # Уменьшаем остаток партии
-        batch.current_qty -= data.quantity
-        if batch.current_qty == 0:
-            batch.status = 'depleted'
-        
-        # Обновляем сводный кэш stock
+        # Обновляем Stock
         stock = await db.scalar(
-            select(Stock).where(Stock.product_id == batch.product_id)
+            select(Stock).where(Stock.product_id == product_id)
         )
         if stock:
             stock.quantity -= data.quantity
@@ -219,6 +237,7 @@ class BatchService:
         # Создаём запись о списании
         write_off = WriteOff(
             batch_id=data.batch_id,
+            product_id=product_id,
             quantity=data.quantity,
             reason=data.reason,
             created_by=user_id
@@ -226,9 +245,10 @@ class BatchService:
         db.add(write_off)
         await db.flush()
         
-        # Создаём движение (используем только reason)
+        # Создаём движение
         movement = Movement(
-            batch_id=batch.id,
+            product_id=product_id,
+            batch_id=movement_batch_id,
             movement_type='write_off',
             quantity=data.quantity,
             reason=f"Списание: {data.reason}",
@@ -297,66 +317,6 @@ class StockService:
         )
         result = await db.execute(stmt)
         return [StockByProduct(**row._mapping) for row in result]
-
-    @staticmethod
-    async def create_write_off(
-        db: AsyncSession, 
-        data: 'WriteOffCreate',  # type: ignore
-        user_id: int
-    ) -> 'WriteOff':  # type: ignore
-        """Создаёт списание товара и обновляет остатки."""
-        from app.inventory.models import WriteOff, Movement
-        
-        # Проверяем, что партия существует
-        batch = await db.get(Batch, data.batch_id)
-        if not batch:
-            raise ValueError(f"Партия с id={data.batch_id} не найдена")
-        
-        # Проверяем, что достаточно остатков
-        if batch.current_qty < data.quantity:
-            raise ValueError(
-                f"Недостаточно остатков в партии. "
-                f"Доступно: {batch.current_qty}, требуется: {data.quantity}"
-            )
-        
-        # Уменьшаем остаток партии
-        batch.current_qty -= data.quantity
-        if batch.current_qty == 0:
-            batch.status = 'depleted'
-        
-        # Обновляем сводный кэш stock
-        stock = await db.scalar(
-            select(Stock).where(Stock.product_id == batch.product_id)
-        )
-        if stock:
-            stock.quantity -= data.quantity
-            stock.updated_at = datetime.utcnow()
-        
-        # Создаём запись о списании
-        write_off = WriteOff(
-            batch_id=data.batch_id,
-            quantity=data.quantity,
-            reason=data.reason,
-            notes=data.notes,
-            created_by=user_id
-        )
-        db.add(write_off)
-        await db.flush()
-        
-        # Создаём движение
-        movement = Movement(
-            batch_id=batch.id,
-            movement_type='write_off',
-            quantity=data.quantity,
-            reason=f'Списание: {data.reason}',
-            created_by=user_id
-        )
-        db.add(movement)
-        
-        await db.commit()
-        await db.refresh(write_off)
-        return write_off
-
     @staticmethod
     async def get_write_offs(
         db: AsyncSession,
@@ -644,9 +604,6 @@ class PurchaseOrderService:
                 quantity=float(item_data.quantity),
                 purchase_price=float(unit_price),
                 batch_number=f"{order.order_number}-{receipt.id}",
-                unit_type=getattr(item_data, 'unit_type', None),
-                base_quantity=getattr(item_data, 'base_quantity', None),
-                base_unit=getattr(item_data, 'base_unit', None),
                 received_quality_pct=getattr(item_data, 'received_quality_pct', None)
             )
         

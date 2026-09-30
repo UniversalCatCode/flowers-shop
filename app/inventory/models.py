@@ -67,7 +67,8 @@ class WriteOff(Base):
     __table_args__ = {'schema': 'inventory'}
 
     id = Column(BigInteger, primary_key=True, index=True)
-    batch_id = Column(BigInteger, ForeignKey('inventory.batches.id'), nullable=False)
+    batch_id = Column(BigInteger, ForeignKey('inventory.batches.id'), nullable=True)
+    product_id = Column(BigInteger, ForeignKey('catalog.products.id'), nullable=True)
     quantity = Column(DECIMAL(10, 2), nullable=False)
     reason = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
