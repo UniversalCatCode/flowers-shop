@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { 
   Table, Button, Space, Modal, Form, Input, Select, InputNumber, 
   message, Card, Tag, DatePicker, Typography, Tooltip 
@@ -25,6 +25,7 @@ interface Batch {
   id: number;
   product_id: number;
   product_name: string;
+  batch_number: string | null;
   current_qty: number;
   received_at: string;
 }
@@ -48,6 +49,7 @@ const WriteOffsPage: React.FC = () => {
   const [writeOffs, setWriteOffs] = useState<WriteOff[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [searchText, setSearchText] = useState('');
   const [loading, setLoading] = useState(false);
   
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -59,20 +61,25 @@ const WriteOffsPage: React.FC = () => {
   const [reasonFilter, setReasonFilter] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    fetchData();
     fetchBatches();
     fetchProducts();
   }, []);
 
+  // Refs для актуальных значений фильтров (избегаем stale closure)
+  const filtersRef = useRef({ reasonFilter, dateRange, searchText });
+  filtersRef.current = { reasonFilter, dateRange, searchText };
+
   const fetchData = async () => {
     setLoading(true);
     try {
+      const { reasonFilter: rf, dateRange: dr, searchText: st } = filtersRef.current;
       const params: any = { limit: 500 };
-      if (reasonFilter) params.reason = reasonFilter;
-      if (dateRange) {
-        params.date_from = dateRange[0].toISOString();
-        params.date_to = dateRange[1].toISOString();
+      if (rf) params.reason = rf;
+      if (dr) {
+        params.date_from = dr[0].toISOString();
+        params.date_to = dr[1].toISOString();
       }
+      if (st) params.search = st;
       const response = await apiClient.get<any>('/inventory/write-offs', { params });
       const data = Array.isArray(response.data) ? response.data : (response.data?.items || []);
       setWriteOffs(data);
@@ -82,6 +89,11 @@ const WriteOffsPage: React.FC = () => {
       setLoading(false);
     }
   };
+
+  // Автозагрузка при изменении фильтров
+  useEffect(() => {
+    fetchData();
+  }, [reasonFilter, dateRange, searchText]);
 
   const fetchBatches = async () => {
     try {
@@ -163,7 +175,9 @@ const WriteOffsPage: React.FC = () => {
   const getBatchInfo = (batchId: number | null) => {
     if (!batchId) return '—';
     const batch = batches.find(b => b.id === batchId);
-    return batch ? `${batch.product_name} (Партия #${batch.id})` : `Партия #${batchId}`;
+    if (!batch) return `Партия #${batchId}`;
+    const num = batch.batch_number || dayjs(batch.received_at).format('DD.MM.YYYY');
+    return `${batch.product_name} (${num})`;
   };
 
   // Фильтруем партии по выбранному товару
@@ -171,11 +185,34 @@ const WriteOffsPage: React.FC = () => {
 
   const columns = [
     {
-      title: 'Партия / Товар',
-      key: 'source',
+      title: 'Товар',
+      key: 'product',
       render: (_: any, record: WriteOff) => {
-        if (record.batch_id) return getBatchInfo(record.batch_id);
-        return record.product_name || `Товар #${record.product_id}`;
+        // Ищем название товара
+        let productName = record.product_name;
+        if (!productName && record.batch_id) {
+          const batch = batches.find(b => b.id === record.batch_id);
+          productName = batch?.product_name;
+        }
+        if (!productName && record.product_id) {
+          const prod = products.find(p => p.id === record.product_id);
+          productName = prod?.name;
+        }
+        
+        return (
+          <Space direction="vertical" size={0}>
+            <Typography.Text strong>{productName || '—'}</Typography.Text>
+            {record.batch_id && (() => {
+              const batch = batches.find(b => b.id === record.batch_id);
+              const batchNum = batch?.batch_number || (batch?.received_at ? dayjs(batch.received_at).format('DD.MM.YYYY') : `#${record.batch_id}`);
+              return (
+                <Typography.Text type="secondary" style={{ fontSize: '12px' }}>
+                  {batchNum}
+                </Typography.Text>
+              );
+            })()}
+          </Space>
+        );
       },
     },
     {
@@ -221,7 +258,16 @@ const WriteOffsPage: React.FC = () => {
       <Card 
         title="Списания товаров"
         extra={
-          <Space>
+          <Space wrap>
+            <Input.Search
+              placeholder="Поиск по товару"
+              allowClear
+              style={{ width: 220 }}
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              onSearch={(val) => setSearchText(val)}
+              enterButton
+            />
             <Select
               placeholder="Фильтр по причине"
               allowClear
@@ -316,7 +362,7 @@ const WriteOffsPage: React.FC = () => {
               >
                 {filteredBatches.map(b => (
                   <Option key={b.id} value={b.id}>
-                    Партия #{b.id} от {dayjs(b.received_at).format('DD.MM.YYYY')} (Остаток: {b.current_qty})
+                    {b.batch_number || `Партия #${b.id}`} от {dayjs(b.received_at).format('DD.MM.YYYY')} (Остаток: {b.current_qty})
                   </Option>
                 ))}
               </Select>

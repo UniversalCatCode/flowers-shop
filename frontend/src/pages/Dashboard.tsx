@@ -45,6 +45,7 @@ const DashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [capabilityLoading, setCapabilityLoading] = useState(false);
   const [capabilityExpanded, setCapabilityExpanded] = useState(false);
+  const [assemblable, setAssemblable] = useState<CapabilityRecipe[]>([]);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -76,6 +77,11 @@ const DashboardPage: React.FC = () => {
           return a.max_assemblable - b.max_assemblable;
         });
       setCapability(problemRecipes);
+      // Букеты, которые можно собрать (статус ok и max_assemblable > 0)
+      const canAssemble = (response.data.recipes || [])
+        .filter((r: any) => r.recipe_status === 'ok' && r.max_assemblable > 0)
+        .sort((a: any, b: any) => b.max_assemblable - a.max_assemblable);
+      setAssemblable(canAssemble);
     } catch (error) {
       console.error('Ошибка загрузки возможностей сборки', error);
     } finally {
@@ -314,6 +320,60 @@ const DashboardPage: React.FC = () => {
         )}
       </Card>
 
+      {/* Букеты, которые можно собрать */}
+      {assemblable.length > 0 && (
+        <Card 
+          style={{ marginBottom: 24 }}
+          size="small"
+        >
+          <Collapse 
+            ghost 
+            defaultActiveKey={[]}
+            items={[{
+              key: 'assemblable',
+              label: (
+                <Space>
+                  <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                  <Text strong>Можно собрать</Text>
+                  <Badge count={assemblable.length} style={{ backgroundColor: '#52c41a' }} />
+                </Space>
+              ),
+              children: (
+                <Row gutter={[12, 12]}>
+                  {assemblable.map((recipe) => {
+                    const bouquetNames = recipe.bouquet_products?.map((bp: any) => bp.name).join(', ') || recipe.recipe_name;
+                    return (
+                      <Col xs={12} sm={8} md={6} key={recipe.recipe_id}>
+                        <Card size="small" hoverable style={{ textAlign: 'center', height: '100%' }}>
+                          <Text strong style={{ display: 'block', marginBottom: 2, fontSize: 13 }}>
+                            {bouquetNames}
+                          </Text>
+                          <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>
+                            Рецепт: {recipe.recipe_name}
+                          </Text>
+                          <Statistic 
+                            value={recipe.max_assemblable} 
+                            suffix="шт." 
+                            valueStyle={{ color: '#52c41a', fontSize: 22 }}
+                          />
+                          {recipe.limiting_component && (
+                            <Tooltip title={`Ограничивает: ${recipe.limiting_component.name} (остаток: ${recipe.limiting_component.available}, нужно на 1 шт.: ${recipe.limiting_component.needed_per_unit})`}>
+                              <Text type="warning" style={{ fontSize: 11, display: 'block', marginTop: 4 }}>
+                                ⚠️ {recipe.limiting_component.name} ({recipe.limiting_component.available} ост.)
+                              </Text>
+                            </Tooltip>
+                          )}
+                        </Card>
+                      </Col>
+                    );
+                  })}
+                </Row>
+              )
+            }]}
+          />
+        </Card>
+      )}
+
       {/* Ряд 3: Заказы на сборку */}
       <Card title={`Заказы, ожидающие сборки (${data.pending_assembly.length})`} style={{ marginBottom: 24 }}>
         {data.pending_assembly.length === 0 ? (
@@ -366,7 +426,9 @@ const DashboardPage: React.FC = () => {
         <Col xs={24} md={10}>
           <Card title="Быстрые действия">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {[                { title: 'Новый заказ', link: '/sales/orders', icon: <ShoppingOutlined /> },
+              {[                
+                { title: 'Новый заказ', link: '/sales/orders', icon: <ShoppingOutlined /> },
+                { title: 'Заказ поставщику', link: '/inventory/purchase-orders', icon: <InboxOutlined /> },
                 { title: 'Управление поставщиками', link: '/catalog/suppliers', icon: <CheckCircleOutlined /> },
               ].map((item, idx) => (
                 <div 
@@ -376,7 +438,7 @@ const DashboardPage: React.FC = () => {
                     alignItems: 'center', 
                     justifyContent: 'space-between', 
                     padding: '8px 0', 
-                    borderBottom: idx < 2 ? '1px solid #f0f0f0' : 'none' 
+                    borderBottom: idx < 3 ? '1px solid #f0f0f0' : 'none' 
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

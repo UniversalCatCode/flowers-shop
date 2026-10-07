@@ -77,6 +77,7 @@ class WriteOff(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     batch = relationship("Batch", back_populates="write_offs")
+    product = relationship("Product", foreign_keys=[product_id])
 
 class PurchaseOrder(Base):
     """
@@ -112,6 +113,7 @@ class PurchaseOrder(Base):
     
     # Статус оплаты (отдельно от статуса документа)
     payment_status = Column(String(20), default='pending', nullable=False)
+    paid_amount = Column(DECIMAL(12, 2), default=0, nullable=False)
     
     # Режим создания: ручной или по букетам
     mode = Column(String(20), default='manual', nullable=False)

@@ -158,3 +158,15 @@ def require_any_permission(*permission_names: str) -> Callable:
         return current_user
     
     return permission_checker
+
+
+async def require_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Зависимость: только пользователи с ролью admin"""
+    if not current_user.roles or not any(r.name == 'admin' for r in current_user.roles):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Требуется роль администратора"
+        )
+    return current_user

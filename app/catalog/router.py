@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload 
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_admin
 from app.users.models import User
 from app.catalog.models import Category,Recipe,RecipeItem,Product, ProductImage 
 from app.catalog.schemas import (
@@ -256,7 +256,7 @@ async def delete_supplier(
 async def create_recipe(
     data: RecipeCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     # 1. Создаём основной рецепт
     recipe = Recipe(
@@ -322,7 +322,7 @@ async def update_recipe(
     recipe_id: int,
     data: RecipeUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     # 1. Загружаем рецепт СРАЗУ с компонентами
     stmt = select(Recipe).options(selectinload(Recipe.items)).where(Recipe.id == recipe_id)

@@ -5,6 +5,7 @@ import {
 } from 'antd';
 import { PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
 import apiClient from '../../api/client';
+import { authApi } from '../../api/auth';
 import { Product } from '../../types/api';
 
 const { TextArea } = Input;
@@ -38,6 +39,7 @@ const RecipesPage: React.FC = () => {
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
   const [editingRecipe, setEditingRecipe] = useState<Recipe | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
   const [form] = Form.useForm();
   const [items, setItems] = useState<RecipeItem[]>([]);
@@ -84,6 +86,10 @@ const RecipesPage: React.FC = () => {
 
   useEffect(() => {
     fetchData();
+    // Загружаем права пользователя
+    apiClient.get('/users/me').then(res => {
+      setIsAdmin(res.data.role_name === 'admin');
+    }).catch(() => setIsAdmin(false));
   }, []);
 
   const handleCreate = () => {
@@ -217,9 +223,9 @@ const RecipesPage: React.FC = () => {
       render: (_: any, record: Recipe) => (
         <Space>
           <Button type="link" icon={<EyeOutlined />} onClick={() => showDetails(record)} />
-          <Button type="link" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
+          {isAdmin && <Button type="link" icon={<EditOutlined />} onClick={() => handleEdit(record)} />}
           <Popconfirm title="Удалить рецепт?" onConfirm={() => handleDelete(record.id)}>
-            <Button type="link" danger icon={<DeleteOutlined />} />
+            {isAdmin && <Button type="link" danger icon={<DeleteOutlined />} />}
           </Popconfirm>
         </Space>
       )
@@ -233,7 +239,7 @@ const RecipesPage: React.FC = () => {
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>Обновить</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>Создать рецепт</Button>
+            {isAdmin && <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>Создать рецепт</Button>}
           </Space>
         }
       >

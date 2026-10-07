@@ -6,10 +6,11 @@ import {
 } from 'antd';
 import {
   PlusOutlined, CheckOutlined, CloseOutlined, ShoppingCartOutlined,
-  EyeOutlined, DollarOutlined, ReloadOutlined
+  EyeOutlined, DollarOutlined, ReloadOutlined, EditOutlined, UndoOutlined, PrinterOutlined, 
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import apiClient from '../../api/client';
+import { authApi } from '../../api/auth';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -47,13 +48,14 @@ interface PurchaseOrder {
   supplier_name?: string;
   status: string;
   payment_status: string;
+  paid_amount: number;
+  total_amount: number;
   mode: string;
   expected_date?: string;
   created_at: string;
   updated_at?: string;
   notes?: string;
   creator_name?: string;
-  total_amount: number;
   received_amount: number;
   is_fully_received: boolean;
   items: PurchaseOrderItem[];
@@ -79,12 +81,18 @@ const paymentStatusConfig: Record<string, { color: string; label: string }> = {
   deferred: { color: 'purple', label: 'Отсрочка' },
 };
 
+const fmtMoney = (v: any) => {
+  const n = Number(v) || 0;
+  return n.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
 const PurchaseOrdersPage: React.FC = () => {
   const navigate = useNavigate();
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
   
   // Фильтры
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
@@ -103,12 +111,16 @@ const PurchaseOrdersPage: React.FC = () => {
   
   // Модалка деталей
   const [detailModalVisible, setDetailModalVisible] = useState(false);
+  const [paymentModalVisible, setPaymentModalVisible] = useState(false);
+  const [paymentOrder, setPaymentOrder] = useState<PurchaseOrder | null>(null);
+  const [paymentForm] = Form.useForm();
   const [detailOrder, setDetailOrder] = useState<PurchaseOrder | null>(null);
   
   // Модалка подтверждения
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
   const [confirmOrderId, setConfirmOrderId] = useState<number | null>(null);
   const [confirmForm] = Form.useForm();
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
@@ -140,9 +152,23 @@ const PurchaseOrdersPage: React.FC = () => {
     }
   };
 
+  const fetchProducts = async () => {
+    try {
+      const response = await apiClient.get('/catalog/products?limit=500');
+      const data = response.data;
+      setProducts(Array.isArray(data) ? data : (data?.items || []));
+    } catch (error) { console.error('Failed to load products', error); }
+  };
+
   useEffect(() => {
     fetchOrders();
+    fetchProducts();
   }, [fetchOrders]);
+
+  // Загружаем текущего пользователя для проверки роли
+  useEffect(() => {
+    authApi.getCurrentUser().then(setCurrentUser).catch(console.error);
+  }, []);
 
   useEffect(() => {
     fetchSuppliers();
@@ -179,6 +205,44 @@ const PurchaseOrdersPage: React.FC = () => {
       fetchOrders();
     } catch (error: any) {
       message.error(error.response?.data?.detail || 'Ошибка при отмене');
+    }
+  };
+
+  // Определение прав по роли
+  const userRole = (currentUser?.role_name || '').toLowerCase();
+  const rolesArr = (currentUser?.roles || []).map((r: any) => (r.name || '').toLowerCase());
+  const isAdmin = userRole.includes('admin') || userRole.includes('админ') || rolesArr.some((r: string) => r.includes('admin') || r.includes('админ'));
+
+  const handleRevertStatus = async (orderId: number, newStatus: string) => {
+    try {
+      await apiClient.post(`/inventory/purchase-orders/${orderId}/revert`, { status: newStatus });
+      message.success(`Статус изменён на "${newStatus === 'draft' ? 'Черновик' : 'Подтверждён'}"`);
+      fetchOrders();
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || 'Ошибка при изменении статуса');
+    }
+  };
+
+  const openPaymentModal = (order: PurchaseOrder) => {
+    setPaymentOrder(order);
+    paymentForm.setFieldsValue({
+      paid_amount: order.paid_amount || 0,
+    });
+    setPaymentModalVisible(true);
+  };
+
+  const handlePayment = async () => {
+    try {
+      const values = await paymentForm.validateFields();
+      await apiClient.put(`/inventory/purchase-orders/${paymentOrder!.id}/payment`, {
+        paid_amount: values.paid_amount,
+      });
+      message.success('Оплата обновлена');
+      setPaymentModalVisible(false);
+      paymentForm.resetFields();
+      fetchOrders();
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || 'Ошибка при обновлении оплаты');
     }
   };
 
@@ -224,6 +288,7 @@ const PurchaseOrdersPage: React.FC = () => {
 
       await apiClient.post(`/inventory/purchase-orders/${receiveOrder!.id}/receive`, {
         receipt_number: values.receipt_number,
+        receipt_date: values.receipt_date ? values.receipt_date.format('YYYY-MM-DD') : null,
         notes: values.notes,
         items,
       });
@@ -285,12 +350,28 @@ const PurchaseOrdersPage: React.FC = () => {
     },
     {
       title: 'Оплата',
-      dataIndex: 'payment_status',
-      key: 'payment_status',
-      width: 130,
-      render: (status) => {
-        const config = paymentStatusConfig[status] || { color: 'default', label: status };
-        return <Tag color={config.color}>{config.label}</Tag>;
+      key: 'payment',
+      width: 180,
+      render: (_, record) => {
+        const total = record.total_amount || 0;
+        const paid = record.paid_amount || 0;
+        const statusMap: Record<string, { color: string; label: string }> = {
+          pending: { color: 'default', label: 'Не оплачен' },
+          partial: { color: 'orange', label: 'Частично' },
+          paid: { color: 'green', label: 'Оплачен' },
+        };
+        const st = statusMap[record.payment_status] || statusMap.pending;
+        return (
+          <Space direction="vertical" size={0}>
+            <Tag color={st.color}>{st.label}</Tag>
+            <Text style={{ fontSize: 12 }}>{fmtMoney(paid)} / {fmtMoney(total)} ₽</Text>
+            {isAdmin && record.status !== 'cancelled' && (
+              <Button type="link" size="small" icon={<DollarOutlined />} onClick={() => openPaymentModal(record)}>
+                Оплата
+              </Button>
+            )}
+          </Space>
+        );
       },
     },
     {
@@ -301,10 +382,10 @@ const PurchaseOrdersPage: React.FC = () => {
       align: 'right',
       render: (amount, record) => (
         <Space direction="vertical" size={0}>
-          <Text strong>{amount?.toLocaleString('ru-RU')} ₽</Text>
+          <Text strong>{fmtMoney(amount)} ₽</Text>
           {record.received_amount > 0 && (
             <Text type="secondary" style={{ fontSize: 12 }}>
-              Принято: {record.received_amount.toLocaleString('ru-RU')} ₽
+              Принято: {fmtMoney(record.received_amount)} ₽
             </Text>
           )}
         </Space>
@@ -375,6 +456,17 @@ const PurchaseOrdersPage: React.FC = () => {
             </>
           )}
           
+          {record.status === 'draft' && (
+            <Tooltip title="Редактировать">
+              <Button
+                type="text"
+                size="small"
+                icon={<EditOutlined />}
+                onClick={() => navigate(`/inventory/purchase-orders/${record.id}/edit`)}
+              />
+            </Tooltip>
+          )}
+          
           {record.status === 'confirmed' && !record.is_fully_received && (
             <Tooltip title="Принять товар">
               <Button
@@ -385,6 +477,47 @@ const PurchaseOrdersPage: React.FC = () => {
               />
             </Tooltip>
           )}
+          
+          {isAdmin && record.status === 'confirmed' && (
+            <Popconfirm
+              title="Вернуть заказ в черновик?"
+              onConfirm={() => handleRevertStatus(record.id, 'draft')}
+            >
+              <Tooltip title="Откатить в черновик (админ)">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<UndoOutlined />}
+                  style={{ color: 'orange' }}
+                />
+              </Tooltip>
+            </Popconfirm>
+          )}
+          
+          {isAdmin && record.status === 'received' && (
+            <Popconfirm
+              title="Откатить приёмку? Заказ вернётся в статус «Подтверждён»"
+              onConfirm={() => handleRevertStatus(record.id, 'confirmed')}
+            >
+              <Tooltip title="Откатить приёмку (админ)">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<UndoOutlined />}
+                  style={{ color: 'red' }}
+                />
+              </Tooltip>
+            </Popconfirm>
+          )}
+
+          <Tooltip title="Печать">
+            <Button
+              type="text"
+              size="small"
+              icon={<PrinterOutlined />}
+              onClick={() => window.open(`/inventory/purchase-orders/${record.id}/print`, '_blank')}
+            />
+          </Tooltip>
         </Space>
       ),
     },
@@ -520,8 +653,34 @@ const PurchaseOrdersPage: React.FC = () => {
       >
         <Form form={receiveForm} layout="vertical">
           <Space style={{ width: '100%' }} size="large">
-            <Form.Item name="receipt_number" label="Номер накладной" style={{ flex: 1 }}>
+            <Form.Item 
+              name="receipt_number" 
+              label="Номер накладной" 
+              style={{ flex: 1 }}
+              rules={[{ required: true, message: 'Укажите номер накладной' }]}
+            >
               <Input placeholder="Например: НАКЛ-001" />
+            </Form.Item>
+            <Form.Item 
+              name="receipt_date" 
+              label="Дата накладной"
+              style={{ flex: 1 }}
+              rules={[{ required: true, message: 'Укажите дату накладной' }]}
+            >
+              <DatePicker 
+                key={currentUser ? 'recv-loaded' : 'recv-loading'}
+                format="DD.MM.YYYY" 
+                style={{ width: '100%' }}
+                disabledDate={(current) => {
+                  if (!current) return false;
+                  if (current.isAfter(dayjs(), 'day')) return true;
+                  const userRole = (currentUser?.role_name || '').toLowerCase();
+                  const rolesArr = (currentUser?.roles || []).map((r: any) => (r.name || '').toLowerCase());
+                  const isAdmin = userRole.includes('admin') || userRole.includes('админ') || rolesArr.some((r: string) => r.includes('admin') || r.includes('админ'));
+                  if (!isAdmin && current.isBefore(dayjs().subtract(3, 'day'), 'day')) return true;
+                  return false;
+                }}
+              />
             </Form.Item>
           </Space>
 
@@ -598,6 +757,37 @@ const PurchaseOrdersPage: React.FC = () => {
         </Form>
       </Modal>
 
+      {/* Модалка оплаты */}
+      <Modal
+        title={`Оплата заказа ${paymentOrder?.order_number}`}
+        open={paymentModalVisible}
+        onCancel={() => { setPaymentModalVisible(false); paymentForm.resetFields(); }}
+        onOk={handlePayment}
+        okText="Сохранить"
+        cancelText="Отмена"
+      >
+        <Form form={paymentForm} layout="vertical">
+          <div style={{ marginBottom: 16 }}>
+            <Text>Сумма заказа: <Text strong>{paymentOrder?.total_amount || 0} ₽</Text></Text>
+            <br />
+            <Text>Текущая оплата: <Text strong>{paymentOrder?.paid_amount || 0} ₽</Text></Text>
+          </div>
+          <Form.Item 
+            name="paid_amount" 
+            label="Сумма оплаты (₽)" 
+            rules={[{ required: true, message: 'Укажите сумму' }]}
+          >
+            <InputNumber 
+              min={0} 
+              max={paymentOrder?.total_amount || 0} 
+              step={100} 
+              style={{ width: '100%' }} 
+              placeholder="Введите сумму оплаты"
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
       {/* Модалка подтверждения */}
       <Modal
         title="Подтверждение заказа"
@@ -608,7 +798,7 @@ const PurchaseOrdersPage: React.FC = () => {
         cancelText="Отмена"
       >
         <Alert
-          message="Для подтверждения заказа необходим номер счёта от поставщика"
+          message="Для подтверждения необходимы номер и дата счёта от поставщика"
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
@@ -621,8 +811,25 @@ const PurchaseOrdersPage: React.FC = () => {
           >
             <Input placeholder="Например: СЧ-2026-001" />
           </Form.Item>
-          <Form.Item name="invoice_date" label="Дата счёта">
-            <DatePicker format="DD.MM.YYYY" style={{ width: '100%' }} />
+          <Form.Item 
+            name="invoice_date" 
+            label="Дата счёта"
+            rules={[{ required: true, message: 'Укажите дату счёта' }]}
+          >
+            <DatePicker 
+              key={currentUser ? 'loaded' : 'loading'}
+              format="DD.MM.YYYY" 
+              style={{ width: '100%' }}
+              disabledDate={(current) => {
+                if (!current) return false;
+                if (current.isAfter(dayjs(), 'day')) return true;
+                const userRole = (currentUser?.role_name || '').toLowerCase();
+                const rolesArr = (currentUser?.roles || []).map((r: any) => (r.name || '').toLowerCase());
+                const isAdmin = userRole.includes('admin') || userRole.includes('админ') || rolesArr.some((r: string) => r.includes('admin') || r.includes('админ'));
+                if (!isAdmin && current.isBefore(dayjs().subtract(3, 'day'), 'day')) return true;
+                return false;
+              }}
+            />
           </Form.Item>
         </Form>
       </Modal>

@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   Form, Input, Select, InputNumber, Button, Space, Card,
   message, DatePicker, Divider, Typography, Tag, Alert, Tabs, Table, Radio, Statistic, Row, Col
 } from 'antd';
-import { PlusOutlined, MinusCircleOutlined, SaveOutlined, CalculatorOutlined } from '@ant-design/icons';
+import { PlusOutlined, MinusCircleOutlined, SaveOutlined, CalculatorOutlined, PrinterOutlined } from '@ant-design/icons';
 import apiClient from '../../api/client';
 import dayjs from 'dayjs';
 
@@ -49,6 +49,11 @@ const PurchaseOrderCreatePage: React.FC = () => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'manual' | 'by_bouquet'>('manual');
+  
+  // Режим редактирования
+  const { id: editId } = useParams();
+  const isEditMode = !!editId;
+  const [editingOrder, setEditingOrder] = useState<any>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [bouquets, setBouquets] = useState<Product[]>([]);
@@ -79,6 +84,28 @@ const PurchaseOrderCreatePage: React.FC = () => {
       setSuppliers(supps);
     } catch (error) {
       message.error('Не удалось загрузить справочники');
+    }
+    
+    // Загружаем заказ при редактировании
+    if (editId) {
+      try {
+        const response = await apiClient.get(`/inventory/purchase-orders/${editId}`);
+        const order = response.data;
+        setEditingOrder(order);
+        form.setFieldsValue({
+          supplier_id: order.supplier_id,
+          expected_date: order.expected_date ? dayjs(order.expected_date) : null,
+          notes: order.notes,
+          items: order.items?.map((item: any) => ({
+            product_id: item.product_id,
+            ordered_qty: item.ordered_qty,
+            unit_price: item.unit_price,
+            notes: item.notes,
+          })) || [],
+        });
+      } catch (error) {
+        message.error('Не удалось загрузить заказ');
+      }
     }
   };
 
@@ -154,8 +181,14 @@ const PurchaseOrderCreatePage: React.FC = () => {
         items,
       };
 
-      const response = await apiClient.post('/inventory/purchase-orders', payload);
-      message.success(`Заказ ${response.data.order_number} создан!`);
+      let response;
+      if (isEditMode) {
+        response = await apiClient.put(`/inventory/purchase-orders/${editId}`, payload);
+        message.success(`Заказ ${response.data.order_number} обновлён!`);
+      } else {
+        response = await apiClient.post('/inventory/purchase-orders', payload);
+        message.success(`Заказ ${response.data.order_number} создан!`);
+      }
       
       // Перенаправляем на список заказов
       navigate('/inventory/purchase-orders');
@@ -173,9 +206,9 @@ const PurchaseOrderCreatePage: React.FC = () => {
   };
 
   return (
-    <Card title="Создание заказа поставщику" style={{ maxWidth: 1200, margin: '0 auto' }}>
+    <Card title={isEditMode ? `Редактирование заказа ${editingOrder?.order_number || ''}` : "Создание заказа поставщику"} style={{ maxWidth: 1200, margin: '0 auto' }}>
       {/* Переключатель режима */}
-      <div style={{ marginBottom: 24 }}>
+      {!isEditMode && <div style={{ marginBottom: 24 }}>
         <Radio.Group
           value={mode}
           onChange={(e) => setMode(e.target.value)}
@@ -185,7 +218,7 @@ const PurchaseOrderCreatePage: React.FC = () => {
           <Radio.Button value="manual">Ручной режим</Radio.Button>
           <Radio.Button value="by_bouquet">По букетам</Radio.Button>
         </Radio.Group>
-      </div>
+      </div>}
 
       <Form
         form={form}
@@ -260,6 +293,14 @@ const PurchaseOrderCreatePage: React.FC = () => {
                             optionFilterProp="label"
                             placeholder="Поиск по названию или SKU"
                             style={{ width: 400 }}
+                            onChange={(val) => {
+                              const prod = products.find(p => p.id === val);
+                              if (prod?.purchase_price != null) {
+                                const items = form.getFieldValue('items') || [];
+                                items[name] = { ...items[name], unit_price: prod.purchase_price };
+                                form.setFieldsValue({ items });
+                              }
+                            }}
                           >
                             {products.map(p => (
                               <Option key={p.id} value={p.id} label={`${p.name} ${p.sku}`}>
@@ -294,18 +335,36 @@ const PurchaseOrderCreatePage: React.FC = () => {
                           <InputNumber min={0} step={10} style={{ width: '100%' }} />
                         </Form.Item>
 
-                        <Form.Item label="Сумма" style={{ width: 130, marginBottom: 0 }}>
-                          <Form.Item noStyle shouldUpdate={(prev, cur) =>
+                        <Form.Item 
+                          label="Сумма (₽)" 
+                          style={{ width: 140, marginBottom: 0 }}
+                          shouldUpdate={(prev, cur) =>
                             prev.items?.[name]?.ordered_qty !== cur.items?.[name]?.ordered_qty ||
                             prev.items?.[name]?.unit_price !== cur.items?.[name]?.unit_price
-                          }>
-                            {({ getFieldValue }) => {
-                              const qty = Number(getFieldValue(['items', name, 'ordered_qty']) || 0);
-                              const price = Number(getFieldValue(['items', name, 'unit_price']) || 0);
-                              const total = (qty * price).toFixed(0);
-                              return <Text strong>{total} ₽</Text>;
-                            }}
-                          </Form.Item>
+                          }
+                        >
+                          {({ getFieldValue, setFieldsValue }) => {
+                            const qty = Number(getFieldValue(['items', name, 'ordered_qty']) || 0);
+                            const price = Number(getFieldValue(['items', name, 'unit_price']) || 0);
+                            const currentTotal = qty > 0 ? parseFloat((qty * price).toFixed(2)) : 0;
+                            
+                            return (
+                              <InputNumber
+                                min={0}
+                                step={10}
+                                style={{ width: '100%' }}
+                                value={currentTotal}
+                                onChange={(val) => {
+                                  if (val != null && qty > 0) {
+                                    const newPrice = parseFloat((val / qty).toFixed(2));
+                                    const items = getFieldValue('items') || [];
+                                    items[name] = { ...items[name], unit_price: newPrice };
+                                    setFieldsValue({ items });
+                                  }
+                                }}
+                              />
+                            );
+                          }}
                         </Form.Item>
 
                         <Form.Item
@@ -466,9 +525,16 @@ const PurchaseOrderCreatePage: React.FC = () => {
         </Form.Item>
 
         <Form.Item style={{ textAlign: 'right', marginTop: 24 }}>
-          <Button type="primary" htmlType="submit" size="large" icon={<SaveOutlined />} loading={loading}>
-            Создать заказ
-          </Button>
+          <Space size="middle">
+            <Button type="primary" htmlType="submit" size="large" icon={<SaveOutlined />} loading={loading}>
+              {isEditMode ? 'Сохранить изменения' : 'Создать заказ'}
+            </Button>
+            {isEditMode && editId && (
+              <Button size="large" icon={<PrinterOutlined />} onClick={() => window.open(`/inventory/purchase-orders/${editId}/print`, '_blank')}>
+                Печать
+              </Button>
+            )}
+          </Space>
         </Form.Item>
       </Form>
     </Card>

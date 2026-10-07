@@ -118,21 +118,36 @@ async def refresh_access_token(request: RefreshTokenRequest, db: AsyncSession = 
 
 
 @router.get("/me", response_model=UserRead)
-async def get_current_user_info(current_user: User = Depends(get_current_user)):
+async def get_current_user_info(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Загружаем роли с пермишенами
+    stmt = select(User).options(
+        selectinload(User.roles).selectinload(Role.permissions)
+    ).where(User.id == current_user.id)
+    result = await db.execute(stmt)
+    user = result.scalar_one()
+    
     role_name = None
-    if current_user.roles and len(current_user.roles) > 0:
-        role_name = current_user.roles[0].name
+    permissions = []
+    if user.roles and len(user.roles) > 0:
+        role_name = user.roles[0].name
+        for role in user.roles:
+            if role.permissions:
+                permissions.extend([p.name for p in role.permissions])
     
     return UserRead(
-        id=current_user.id,
-        username=current_user.username,
-        email=current_user.email,
-        full_name=current_user.full_name,
-        is_active=current_user.is_active,
-        created_at=current_user.created_at,
-        last_login_at=current_user.last_login_at,
-        roles=current_user.roles,
-        role_name=role_name or "Пользователь"
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        full_name=user.full_name,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        last_login_at=user.last_login_at,
+        roles=user.roles,
+        role_name=role_name or "Пользователь",
+        permissions=list(set(permissions)),
     )
 
 

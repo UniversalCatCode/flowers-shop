@@ -17,6 +17,7 @@ import UsersPage from './pages/users/Users';
 import AlertsPage from './pages/alerts/Alerts';
 import PurchaseOrdersPage from './pages/inventory/PurchaseOrders';
 import PurchaseOrderCreatePage from './pages/inventory/PurchaseOrderCreate';
+import PurchaseOrderPrintPage from './pages/inventory/PurchaseOrderPrint';
 
 const Dashboard = () => <h2>Добро пожаловать в систему управления цветочным магазином! 🌸</h2>;
 
@@ -54,6 +55,8 @@ const App: React.FC = () => {
             <Route path="inventory/write-offs" element={<WriteOffsPage />} />
             <Route path="inventory/purchase-orders" element={<PurchaseOrdersPage />} />
             <Route path="inventory/purchase-orders/create" element={<PurchaseOrderCreatePage />} />
+            <Route path="inventory/purchase-orders/:id/edit" element={<PurchaseOrderCreatePage />} />
+            <Route path="inventory/purchase-orders/:id/print" element={<PurchaseOrderPrintPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="alerts" element={<AlertsPage />} />
 

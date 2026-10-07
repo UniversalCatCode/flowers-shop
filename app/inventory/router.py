@@ -13,7 +13,7 @@ from app.inventory.schemas import (PurchaseOrderConfirm,
     BatchCreate, BatchOut, BatchListOut, StockOut, StockByProduct,
     WriteOffCreate, WriteOffOut, WriteOffListOut, WriteOffUpdate,
     PurchaseOrderCreate, PurchaseOrderUpdate, PurchaseOrderOut, PurchaseOrderListOut,
-    PurchaseOrderStatusUpdate, PurchaseOrderReceiptCreate, PurchaseOrderReceiptOut,
+    PurchaseOrderStatusUpdate, PurchaseOrderPaymentUpdate, PurchaseOrderReceiptCreate, PurchaseOrderReceiptOut,
     BouquetCalculationRequest, BouquetCalculationResponse
 )
 
@@ -80,6 +80,7 @@ async def list_write_offs(
     reason: Optional[str] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
+    search: Optional[str] = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
@@ -87,7 +88,7 @@ async def list_write_offs(
 ):
     """Список списаний с фильтрами"""
     items, total = await BatchService.get_write_offs(
-        db, reason, date_from, date_to, skip, limit
+        db, reason, date_from, date_to, search, skip, limit
     )
     return WriteOffListOut(total=total, items=items)
 
@@ -204,6 +205,7 @@ async def list_purchase_orders(
     # Базовый запрос с загрузкой связей
     base_stmt = select(PurchaseOrder).options(
         selectinload(PurchaseOrder.items).selectinload(PurchaseOrderItem.product),
+        selectinload(PurchaseOrder.receipts).selectinload(PurchaseOrderReceipt.receiver),
         selectinload(PurchaseOrder.receipts).selectinload(PurchaseOrderReceipt.items).selectinload(PurchaseOrderReceiptItem.product),
         selectinload(PurchaseOrder.supplier),
         selectinload(PurchaseOrder.creator)
@@ -275,7 +277,8 @@ async def confirm_purchase_order(
 ):
     """Подтверждает заказ (draft → confirmed). Номер счёта обязателен."""
     try:
-        order = await PurchaseOrderService.change_status(db, order_id, 'confirmed', current_user.id, confirm_data=data)
+        is_admin = any(r.name == 'admin' for r in (current_user.roles or []))
+        order = await PurchaseOrderService.change_status(db, order_id, 'confirmed', current_user.id, confirm_data=data, is_admin=is_admin)
         return await PurchaseOrderService._format_order(order)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -289,6 +292,44 @@ async def cancel_purchase_order(
     """Отменяет заказ."""
     try:
         order = await PurchaseOrderService.change_status(db, order_id, 'cancelled', current_user.id)
+        return await PurchaseOrderService._format_order(order)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+
+@router.post("/purchase-orders/{order_id}/revert", response_model=PurchaseOrderOut)
+async def revert_purchase_order_status(
+    order_id: int,
+    data: PurchaseOrderStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Откат статуса заказа (только для админа)."""
+    is_admin = any(r.name == 'admin' for r in (current_user.roles or []))
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Только администратор может откатывать статусы")
+    try:
+        order = await PurchaseOrderService.change_status(db, order_id, data.status, current_user.id, is_admin=True, is_revert=True)
+        return await PurchaseOrderService._format_order(order)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+
+@router.put("/purchase-orders/{order_id}/payment", response_model=PurchaseOrderOut)
+async def update_payment(
+    order_id: int,
+    data: PurchaseOrderPaymentUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Обновляет оплату заказа (только админ)."""
+    is_admin = any(r.name == 'admin' for r in (current_user.roles or []))
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Только администратор может управлять оплатой")
+    try:
+        order = await PurchaseOrderService.update_payment(db, order_id, data)
         return await PurchaseOrderService._format_order(order)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

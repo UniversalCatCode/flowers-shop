@@ -111,13 +111,13 @@ class PurchaseOrderUpdate(BaseModel):
     items: Optional[List[PurchaseOrderItemUpdate]] = None
 
 class PurchaseOrderConfirm(BaseModel):
-    """Подтверждение заказа — номер счёта обязателен"""
+    """Подтверждение заказа — номер и дата счёта обязательны"""
     supplier_invoice_number: str = Field(..., max_length=100, description="Номер счёта от поставщика")
-    invoice_date: Optional[date] = None
+    invoice_date: date = Field(..., description="Дата счёта")
 
 class PurchaseOrderStatusUpdate(BaseModel):
-    """Смена статуса заказа"""
-    status: str = Field(..., pattern='^(confirmed|cancelled)$')
+    """Смена статуса заказа (для отката админом)"""
+    status: str = Field(..., pattern='^(confirmed|cancelled|draft)$')
 
 class PurchaseOrderItemOut(BaseModel):
     """Позиция заказа с деталями товара"""
@@ -172,6 +172,8 @@ class PurchaseOrderOut(BaseModel):
     supplier_name: Optional[str] = None
     status: str
     payment_status: str
+    paid_amount: Decimal = Decimal('0')
+    total_amount: Decimal = Decimal('0')
     mode: str
     expected_date: Optional[date] = None
     created_at: datetime
@@ -208,11 +210,18 @@ class PurchaseOrderReceiptItemCreate(BaseModel):
 
 class PurchaseOrderReceiptCreate(BaseModel):
     """Создание акта приёмки"""
-    receipt_number: Optional[str] = Field(None, max_length=100)
+    receipt_number: str = Field(..., max_length=100, description="Номер накладной")
+    receipt_date: date = Field(..., description="Дата накладной")
     notes: Optional[str] = None
     items: List[PurchaseOrderReceiptItemCreate] = Field(..., min_length=1)
 
 # ============ РАСЧЁТ ПО БУКЕТАМ ============
+
+
+class PurchaseOrderPaymentUpdate(BaseModel):
+    """Обновление оплаты заказа (только админ)"""
+    paid_amount: Decimal = Field(..., ge=0, decimal_places=2)
+    payment_status: Optional[str] = Field(None, pattern='^(pending|partial|paid)$')
 
 class BouquetSelection(BaseModel):
     """Выбранный букет для расчёта"""

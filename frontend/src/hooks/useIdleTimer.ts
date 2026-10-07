@@ -1,42 +1,53 @@
-import { useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { message } from 'antd';
 
-export const useIdleTimer = (timeoutMinutes: number = 30) => {
+const REDIRECT_MIN = 10;
+const LOGOUT_MIN = 20;
+const HOME_PATH = '/';
+
+export const useIdleTimer = () => {
   const navigate = useNavigate();
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const location = useLocation();
 
-  // Функция выхода из системы
-  const handleLogout = useCallback(() => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    message.warning('Сессия завершена из-за неактивности');
-    navigate('/login');
-  }, [navigate]);
+  const navigateRef = useRef(navigate);
+  const pathRef = useRef(location.pathname);
+  const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const logoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Функция сброса таймера
-  const resetTimer = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
-    // Устанавливаем новый таймер (минуты * 60 секунд * 1000 миллисекунд)
-    timerRef.current = setTimeout(handleLogout, timeoutMinutes * 60 * 1000);
-  }, [handleLogout, timeoutMinutes]);
+  navigateRef.current = navigate;
+  pathRef.current = location.pathname;
 
   useEffect(() => {
-    // События, которые считаются "активностью" пользователя
-    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
-    
-    // При любом из этих событий сбрасываем таймер
-    events.forEach(event => window.addEventListener(event, resetTimer));
-    
-    // Запускаем таймер при первом рендере компонента
-    resetTimer();
+    const resetTimers = () => {
+      // Сброс обоих таймеров при любой активности
+      if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+      if (logoutTimerRef.current) clearTimeout(logoutTimerRef.current);
 
-    // Очистка при закрытии/размонтировании компонента (чтобы не было утечек памяти)
-    return () => {
-      events.forEach(event => window.removeEventListener(event, resetTimer));
-      if (timerRef.current) clearTimeout(timerRef.current);
+      // Таймер редиректа (только если не на главной)
+      redirectTimerRef.current = setTimeout(() => {
+        if (pathRef.current !== HOME_PATH && pathRef.current !== '/login') {
+          navigateRef.current(HOME_PATH);
+        }
+      }, REDIRECT_MIN * 60 * 1000);
+
+      // Таймер логаута (всегда)
+      logoutTimerRef.current = setTimeout(() => {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        message.warning('Сессия завершена из-за неактивности');
+        navigateRef.current('/login');
+      }, LOGOUT_MIN * 60 * 1000);
     };
-  }, [resetTimer]);
+
+    const events = ['mousemove', 'keydown', 'touchstart'];
+    events.forEach(e => window.addEventListener(e, resetTimers));
+    resetTimers();
+
+    return () => {
+      events.forEach(e => window.removeEventListener(e, resetTimers));
+      if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+      if (logoutTimerRef.current) clearTimeout(logoutTimerRef.current);
+    };
+  }, []);
 };

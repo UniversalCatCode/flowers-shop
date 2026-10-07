@@ -18,7 +18,8 @@ const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
 
 const MainLayout: React.FC = () => {
-  useIdleTimer(30); 
+  useIdleTimer();
+  
   const [user, setUser] = useState<User | null>(null);
   const navigate = useNavigate();
   const location = useLocation();

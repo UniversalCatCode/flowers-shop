@@ -16,6 +16,7 @@ export interface User {
   last_login_at?: string | null; // <-- Добавлено
   roles?: any[];             // <-- Добавлено
   role_name?: string;        // <-- ДОБАВЛЕНО: чтобы работало отображение в шапке
+  permissions?: string[];    // <-- Права пользователя
 }
 
 // ============ CATALOG ============

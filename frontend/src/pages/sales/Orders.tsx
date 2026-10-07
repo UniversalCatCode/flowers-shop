@@ -2,8 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { 
   Table, Button, Space, Tag, message, Card, Modal, Form, 
   Input, Select, InputNumber, Tabs, Typography, Descriptions,
-  Popconfirm, Alert, Badge, Tooltip
-} from 'antd';
+  Popconfirm, Alert, Badge, Tooltip, DatePicker } from 'antd';
 import { 
   PlusOutlined, ReloadOutlined, EyeOutlined, 
   CheckCircleOutlined, CloseCircleOutlined, 
@@ -61,6 +60,8 @@ const OrdersPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
   const [activeTab, setActiveTab] = useState('all');
+  const [searchText, setSearchText] = useState('');
+  const [dateRange, setDateRange] = useState<[any, any] | null>(null);
   
   // Модалки
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -159,9 +160,27 @@ const OrdersPage: React.FC = () => {
     fetchData();
   }, []);
   
-  const filteredOrders = activeTab === 'all' 
-    ? orders 
-    : orders.filter(o => o.status === activeTab);
+  const filteredOrders = orders.filter(o => {
+    // Фильтр по статусу (таб)
+    if (activeTab !== 'all' && o.status !== activeTab) return false;
+    // Текстовый поиск (номер, клиент, товар)
+    if (searchText) {
+      const s = searchText.toLowerCase();
+      const matchNumber = o.sale_number?.toLowerCase().includes(s);
+      const matchCustomer = o.customer_name?.toLowerCase().includes(s) || o.customer_phone?.includes(s);
+      const matchProduct = o.items?.some(item => {
+        const prod = products.find(p => p.id === item.product_id);
+        return prod?.name?.toLowerCase().includes(s) || prod?.sku?.toLowerCase().includes(s);
+      });
+      if (!matchNumber && !matchCustomer && !matchProduct) return false;
+    }
+    // Фильтр по периоду дат
+    if (dateRange && dateRange[0] && dateRange[1]) {
+      const orderDate = dayjs(o.created_at);
+      if (orderDate.isBefore(dateRange[0], 'day') || orderDate.isAfter(dateRange[1], 'day')) return false;
+    }
+    return true;
+  });
 
   // ============ СОЗДАНИЕ ЗАКАЗА ============
   const handleCreateOrder = () => {
@@ -520,7 +539,25 @@ const OrdersPage: React.FC = () => {
           items={tabItems}
           style={{ marginBottom: 16 }}
         />
-        
+        <Space style={{ marginBottom: 16 }} wrap>
+          <Input.Search
+            placeholder="Поиск по номеру, клиенту или товару"
+            allowClear
+            style={{ width: 320 }}
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            onSearch={(val) => setSearchText(val)}
+          />
+          <DatePicker.RangePicker
+            value={dateRange}
+            onChange={(dates) => setDateRange(dates as [any, any] | null)}
+            format="DD.MM.YYYY"
+            placeholder={['Дата от', 'Дата до']}
+          />
+          {(searchText || dateRange) && (
+            <Text type="secondary">Найдено: {filteredOrders.length}</Text>
+          )}
+        </Space>
         <Table 
           columns={columns} 
           dataSource={filteredOrders} 
@@ -573,14 +610,21 @@ const OrdersPage: React.FC = () => {
               <Space key={index} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
                 <Select
                   showSearch
-                  optionFilterProp="children"
+                  optionFilterProp="label"
                   placeholder="Выберите товар"
-                  style={{ width: 300 }}
+                  style={{ width: 350 }}
                   value={item.product_id || undefined}
                   onChange={(val) => handleUpdateItem(index, 'product_id', val)}
                 >
-                  {products.map(p => (
-                    <Option key={p.id} value={p.id}>{p.name} ({p.sku})</Option>
+                  {products.filter(p => p.is_active).map(p => (
+                      <Option key={p.id} value={p.id} label={`${p.name} ${p.sku}`}>
+                        <Space>
+                          <Tag color={p.product_type === 'flower' ? 'green' : p.product_type === 'packaging' ? 'blue' : p.product_type === 'bouquet' ? 'magenta' : 'default'}>
+                            {p.product_type === 'flower' ? 'Цветок' : p.product_type === 'packaging' ? 'Упаковка' : p.product_type === 'bouquet' ? 'Букет' : 'Прочее'}
+                          </Tag>
+                          {p.name} ({p.sku})
+                        </Space>
+                      </Option>
                   ))}
                 </Select>
                 <InputNumber

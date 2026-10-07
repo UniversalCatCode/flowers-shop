@@ -1,5 +1,5 @@
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime,timedelta
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -266,11 +266,17 @@ class BatchService:
         reason: Optional[str] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
+        search: Optional[str] = None,
         skip: int = 0,
         limit: int = 100,
     ) -> tuple[List[WriteOff], int]:
         """Получает список списаний с фильтрами."""
-        stmt = select(WriteOff)
+        from app.catalog.models import Product
+        
+        stmt = select(WriteOff).options(
+            selectinload(WriteOff.batch),
+            selectinload(WriteOff.product),
+        )
         count_stmt = select(func.count()).select_from(WriteOff)
         
         if reason:
@@ -282,11 +288,29 @@ class BatchService:
         if date_to:
             stmt = stmt.where(WriteOff.created_at <= date_to)
             count_stmt = count_stmt.where(WriteOff.created_at <= date_to)
+        if search:
+            # Поиск по названию/SKU товара
+            search_pattern = f"%{search}%"
+            matching_product_ids = select(Product.id).where(
+                Product.name.ilike(search_pattern) | Product.sku.ilike(search_pattern)
+            )
+            
+            # Товар найден напрямую через product_id ИЛИ через batch.product_id
+            matching_batch_ids = select(Batch.id).where(
+                Batch.product_id.in_(matching_product_ids)
+            )
+            
+            search_filter = (
+                WriteOff.product_id.in_(matching_product_ids)
+                | WriteOff.batch_id.in_(matching_batch_ids)
+            )
+            stmt = stmt.where(search_filter)
+            count_stmt = count_stmt.where(search_filter)
         
         total = await db.scalar(count_stmt)
         stmt = stmt.order_by(WriteOff.created_at.desc()).offset(skip).limit(limit)
         result = await db.execute(stmt)
-        items = list(result.scalars().all())
+        items = list(result.scalars().unique().all())
         
         return items, total or 0
 
@@ -461,7 +485,7 @@ class PurchaseOrderService:
         return await PurchaseOrderService.get_order(db, order.id)
     
     @staticmethod
-    async def change_status(db: AsyncSession, order_id: int, new_status: str, user_id: int, confirm_data=None):
+    async def change_status(db: AsyncSession, order_id: int, new_status: str, user_id: int, confirm_data=None, is_admin: bool = False, is_revert: bool = False):
         """Меняет статус заказа"""
         order = await PurchaseOrderService.get_order(db, order_id)
         if not order:
@@ -480,13 +504,24 @@ class PurchaseOrderService:
         if new_status not in valid_transitions[order.status]:
             raise ValueError(f"Нельзя перейти из '{order.status}' в '{new_status}'")
         
-        # При подтверждении — номер счёта обязателен
-        if new_status == 'confirmed':
+        # При подтверждении — номер счёта обязателен (кроме отката)
+        if new_status == 'confirmed' and not is_revert:
             if not confirm_data or not confirm_data.supplier_invoice_number:
                 raise ValueError("Для подтверждения заказа необходим номер счёта поставщика")
+            if not confirm_data.invoice_date:
+                raise ValueError("Для подтверждения заказа необходима дата счёта")
+            
+            # Валидация даты
+            today = datetime.utcnow().date()
+            if confirm_data.invoice_date > today:
+                raise ValueError("Дата счёта не может быть позже текущего дня")
+            
+            min_date = today - timedelta(days=3)
+            if not is_admin and confirm_data.invoice_date < min_date:
+                raise ValueError("Дата счёта не может быть раньше 3 дней назад (только администратор)")
+            
             order.supplier_invoice_number = confirm_data.supplier_invoice_number
-            if confirm_data.invoice_date:
-                order.invoice_date = confirm_data.invoice_date
+            order.invoice_date = confirm_data.invoice_date
         
         # Для перехода в 'received' проверяем, что всё принято
         if new_status == 'received':
@@ -497,6 +532,57 @@ class PurchaseOrderService:
                         f"принята не полностью ({item.received_qty}/{item.ordered_qty})"
                     )
         
+        # При откате с received → confirmed: помечаем батчи как voided, корректируем stock
+        if is_revert and order.status == 'received' and new_status == 'confirmed':
+            from app.inventory.models import Batch, Stock, Movement, PurchaseOrderReceipt
+            
+            for item in order.items:
+                if item.received_qty > 0:
+                    # Находим батчи, созданные при приёмке этого заказа
+                    batches_result = await db.execute(
+                        select(Batch).where(
+                            Batch.product_id == item.product_id,
+                            Batch.batch_number.like(f"{order.order_number}-%"),
+                            Batch.status == 'active'
+                        )
+                    )
+                    batches = batches_result.scalars().all()
+                    
+                    for batch in batches:
+                        voided_qty = batch.current_qty
+                        
+                        # Помечаем батч как недействительный
+                        batch.status = 'voided'
+                        
+                        # Создаём movement для аудита
+                        adjustment = Movement(
+                            batch_id=batch.id,
+                            product_id=item.product_id,
+                            movement_type='adjustment',
+                            quantity=-voided_qty,
+                            reason=f'Откат приёмки заказа {order.order_number}',
+                            created_by=user_id
+                        )
+                        db.add(adjustment)
+                        
+                        # Уменьшаем Stock
+                        stock = await db.scalar(
+                            select(Stock).where(Stock.product_id == item.product_id)
+                        )
+                        if stock:
+                            stock.quantity -= voided_qty
+                            stock.updated_at = datetime.utcnow()
+                    
+                    # Сбрасываем received_qty в позиции заказа
+                    item.received_qty = 0
+            
+            # Помечаем акты приёмки как отменённые (не удаляем для истории)
+            receipts_result = await db.execute(
+                select(PurchaseOrderReceipt).where(PurchaseOrderReceipt.purchase_order_id == order.id)
+            )
+            for receipt in receipts_result.scalars().all():
+                receipt.status = 'voided'
+        
         order.status = new_status
         order.updated_at = datetime.utcnow()
         
@@ -504,6 +590,38 @@ class PurchaseOrderService:
         # Возвращаем полностью загруженный объект
         return await PurchaseOrderService.get_order(db, order.id)
     
+
+    @staticmethod
+    async def update_payment(db: AsyncSession, order_id: int, data):
+        """Обновляет оплату заказа"""
+        order = await PurchaseOrderService.get_order(db, order_id)
+        if not order:
+            raise ValueError("Заказ не найден")
+        
+        # Вычисляем общую сумму заказа
+        total = sum(float(item.unit_price * item.ordered_qty) for item in order.items)
+        paid = float(data.paid_amount)
+        
+        if paid > total:
+            raise ValueError(f"Сумма оплаты ({paid}) превышает сумму заказа ({total})")
+        
+        order.paid_amount = data.paid_amount
+        
+        # Определяем статус оплаты
+        if data.payment_status:
+            order.payment_status = data.payment_status
+        else:
+            if paid <= 0:
+                order.payment_status = 'pending'
+            elif paid >= total:
+                order.payment_status = 'paid'
+            else:
+                order.payment_status = 'partial'
+        
+        order.updated_at = datetime.utcnow()
+        await db.commit()
+        return await PurchaseOrderService.get_order(db, order.id)
+
     @staticmethod
     async def receive_order(db: AsyncSession, order_id: int, data, user_id: int):
         """
@@ -519,10 +637,27 @@ class PurchaseOrderService:
         if order.status != 'confirmed':
             raise ValueError("Принимать товар можно только по подтверждённому заказу")
         
+        # Валидация даты накладной
+        today = datetime.utcnow().date()
+        if data.receipt_date > today:
+            raise ValueError("Дата накладной не может быть позже текущего дня")
+        
+        from app.users.models import User as UserModel
+        user_obj = await db.execute(
+            select(UserModel).options(selectinload(UserModel.roles)).where(UserModel.id == user_id)
+        )
+        user_obj = user_obj.scalar_one_or_none()
+        is_admin = any(r.name == 'admin' for r in (user_obj.roles if user_obj else []))
+        
+        min_date = today - timedelta(days=3)
+        if not is_admin and data.receipt_date < min_date:
+            raise ValueError("Дата накладной не может быть раньше 3 дней назад (только администратор)")
+        
         # Создаём акт приёмки
         receipt = PurchaseOrderReceipt(
             purchase_order_id=order.id,
             receipt_number=data.receipt_number,
+            received_at=datetime.combine(data.receipt_date, datetime.min.time()),
             received_by=user_id,
             notes=data.notes
         )
@@ -603,7 +738,7 @@ class PurchaseOrderService:
                 supplier_id=order.supplier_id,
                 quantity=float(item_data.quantity),
                 purchase_price=float(unit_price),
-                batch_number=f"{order.order_number}-{receipt.id}",
+                batch_number=f"{order.order_number}-{receipt.receipt_number or receipt.id}",
                 received_quality_pct=getattr(item_data, 'received_quality_pct', None)
             )
         
@@ -719,6 +854,8 @@ class PurchaseOrderService:
             "supplier_name": order.supplier.name if order.supplier else None,
             "status": order.status,
             "payment_status": order.payment_status,
+                "paid_amount": float(order.paid_amount or 0),
+                "total_amount": float(sum(item.unit_price * item.ordered_qty for item in order.items)),
             "mode": order.mode,
             "expected_date": order.expected_date,
             "created_at": order.created_at,
