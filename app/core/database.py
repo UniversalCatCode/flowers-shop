@@ -37,12 +37,10 @@ from app.analytics import models as analytics_models
 
 # Зависимость для получения сессии БД в эндпоинтах FastAPI
 async def get_db() -> AsyncSession:
+    # Коммит делает вызывающий сервис. Здесь — только rollback при ошибке.
     async with async_session_maker() as session:
         try:
             yield session
-            await session.commit()
         except Exception:
             await session.rollback()
             raise
-        finally:
-            await session.close()

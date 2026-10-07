@@ -49,6 +49,8 @@ async def get_current_user(
     return user
 
 
+# DEPRECATED: используйте require_permission (singular) — единая точка входа.
+# Оставлено для обратной совместимости, но нигде не вызывается.
 def require_permissions(required_permissions: List[str]):
     """Dependency для проверки наличия определённых прав"""
     async def permission_checker(

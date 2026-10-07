@@ -173,7 +173,6 @@ class PurchaseOrderOut(BaseModel):
     status: str
     payment_status: str
     paid_amount: Decimal = Decimal('0')
-    total_amount: Decimal = Decimal('0')
     mode: str
     expected_date: Optional[date] = None
     created_at: datetime

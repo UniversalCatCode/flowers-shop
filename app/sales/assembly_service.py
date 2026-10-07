@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Tuple
 from decimal import Decimal
 from sqlalchemy import select, update
@@ -19,13 +19,14 @@ class OrderAssemblyService:
         Переводит заказ в статус 'assembling'.
         Проверяет наличие ресурсов, но НЕ списывает их.
         """
-        # Загружаем заказ
+        # Загружаем заказ и блокируем строку до конца транзакции
         stmt = (
             select(Sale)
             .options(
                 selectinload(Sale.items).selectinload(SaleItem.product)
             )
             .where(Sale.id == sale_id)
+            .with_for_update()
         )
         result = await db.execute(stmt)
         sale = result.scalar_one_or_none()
@@ -33,12 +34,16 @@ class OrderAssemblyService:
         if not sale:
             raise ValueError("Заказ не найден")
 
+        # Идемпотентность: если уже собирается — не ошибка
+        if sale.status == 'assembling':
+            return sale
+
         if sale.status != 'accepted':
             raise ValueError(f"Нельзя начать сборку. Текущий статус: {sale.status}")
 
         # Меняем статус
         sale.status = 'assembling'
-        sale.assembly_started_at = datetime.utcnow()
+        sale.assembly_started_at = datetime.now(timezone.utc)
         
         await db.commit()
         
@@ -162,15 +167,6 @@ class OrderAssemblyService:
             'can_assemble': len(flower_shortages) == 0 and len(packaging_shortages) == 0 and len(consumable_shortages) == 0
         }
 
-
-        
-        sale.status = 'assembling'
-        sale.assembly_started_at = datetime.utcnow()
-        
-        await db.commit()
-        await db.refresh(sale)
-        return sale
-
     @staticmethod
     async def complete_assembly(db: AsyncSession, sale_id: int, user_id: int) -> Sale:
         """
@@ -181,22 +177,24 @@ class OrderAssemblyService:
         stmt = (
             select(Sale)
             .options(
-                # Путь 1: Позиции заказа и их прямой товар
                 selectinload(Sale.items).selectinload(SaleItem.product),
-                
-                # Путь 2: Позиции заказа -> Рецепт (привязанный к SaleItem!) -> Компоненты -> Товары компонентов
                 selectinload(Sale.items)
                 .selectinload(SaleItem.recipe)
                 .selectinload(Recipe.items)
                 .selectinload(RecipeItem.product)
             )
             .where(Sale.id == sale_id)
+            .with_for_update()
         )
         result = await db.execute(stmt)
         sale = result.scalar_one_or_none()
 
         if not sale:
             raise ValueError("Заказ не найден")
+
+        # Идемпотентность: повторный вызов не списывает остатки второй раз
+        if sale.status == 'assembled':
+            return sale
 
         if sale.status != 'assembling':
             raise ValueError(f"Нельзя завершить сборку. Текущий статус: {sale.status}")
@@ -240,7 +238,7 @@ class OrderAssemblyService:
 
         # 4. Обновляем статус заказа
         sale.status = 'assembled'
-        sale.assembly_completed_at = datetime.utcnow()
+        sale.assembly_completed_at = datetime.now(timezone.utc)
         
         # Обновляем статусы позиций
         for item in sale.items:
@@ -293,7 +291,7 @@ class OrderAssemblyService:
             # 1. Уменьшаем остаток партии
             batch.current_qty -= deduct_from_batch
             if batch.current_qty == 0:
-                batch.status = 'depleted'
+                batch.status = 'exhausted'
             
             # 2. Создаём запись о движении
             movement = Movement(
@@ -326,7 +324,7 @@ class OrderAssemblyService:
         
         if stock_record:
             stock_record.quantity -= qty_to_deduct
-            stock_record.updated_at = datetime.utcnow()
+            stock_record.updated_at = datetime.now(timezone.utc)
         else:
             # Если записи в кэше почему-то нет, создаём её
             new_stock = Stock(product_id=product_id, quantity=-qty_to_deduct)
@@ -349,7 +347,7 @@ class OrderAssemblyService:
             raise ValueError(f"Недостаточно остатков упаковки (ID {product_id}): нужно {qty}, доступно {available}")
         
         stock.quantity -= qty_to_deduct
-        stock.updated_at = datetime.utcnow()
+        stock.updated_at = datetime.now(timezone.utc)
         
         movement = Movement(
             product_id=product_id,
@@ -384,7 +382,7 @@ class OrderAssemblyService:
         
         # Уменьшаем остаток
         stock.quantity -= qty_to_deduct
-        stock.updated_at = datetime.utcnow()
+        stock.updated_at = datetime.now(timezone.utc)
         
         # Создаём движение
         movement = Movement(
@@ -407,6 +405,7 @@ class OrderAssemblyService:
             select(Sale)
             .options(selectinload(Sale.items))
             .where(Sale.id == sale_id)
+            .with_for_update()
         )
         result = await db.execute(stmt)
         sale = result.scalar_one_or_none()
@@ -414,7 +413,10 @@ class OrderAssemblyService:
         if not sale:
             raise ValueError("Заказ не найден")
 
-        if sale.status in ('completed', 'cancelled', 'returned'):
+        if sale.status == 'cancelled':
+            return sale  # идемпотентно
+
+        if sale.status in ('completed', 'returned'):
             raise ValueError(f"Нельзя отменить заказ в статусе {sale.status}")
 
         # Если заказ уже был собран, нужно вернуть остатки
@@ -438,7 +440,7 @@ class OrderAssemblyService:
                         
                         if stock_record:
                             stock_record.quantity += item.quantity
-                            stock_record.updated_at = datetime.utcnow()
+                            stock_record.updated_at = datetime.now(timezone.utc)
                         
                         # Создаем движение возврата
                         movement = Movement(
@@ -453,7 +455,7 @@ class OrderAssemblyService:
 
 
         sale.status = 'cancelled'
-        sale.cancelled_at = datetime.utcnow()
+        sale.cancelled_at = datetime.now(timezone.utc)
         sale.cancellation_reason = reason
 
         await db.commit()

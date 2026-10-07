@@ -2,7 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import jwt
 from typing import Optional, List
 
@@ -110,7 +110,7 @@ class UserService:
         return user
 
     async def create_access_token(self, user_id: int) -> str:
-        expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
         to_encode = {"sub": str(user_id), "exp": expire, "type": "access"}
         encoded_jwt = jwt.encode(
             to_encode,
@@ -122,7 +122,7 @@ class UserService:
     # === ДОБАВЬ ЭТОТ МЕТОД ===
     async def create_refresh_token(self, user_id: int) -> str:
         # Refresh token живет 7 дней (или можешь поставить 24 часа)
-        expire = datetime.utcnow() + timedelta(days=7)
+        expire = datetime.now(timezone.utc) + timedelta(days=7)
         to_encode = {"sub": str(user_id), "exp": expire, "type": "refresh"}
         encoded_jwt = jwt.encode(
             to_encode,
@@ -133,7 +133,7 @@ class UserService:
 
 
     async def update_last_login(self, user: User):
-        user.last_login_at = datetime.utcnow()
+        user.last_login_at = datetime.now(timezone.utc)
         await self.db.commit()
 
     async def get_user_permissions(self, user: User) -> List[str]:

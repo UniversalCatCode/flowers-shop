@@ -1,5 +1,5 @@
 from typing import Optional, List
-from datetime import datetime,timedelta
+from datetime import datetime,timedelta, timezone
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,7 +43,7 @@ class BatchService:
         )
         if stock:
             stock.quantity += data.initial_qty
-            stock.updated_at = datetime.utcnow()
+            stock.updated_at = datetime.now(timezone.utc)
         else:
             stock = Stock(
                 product_id=data.product_id,
@@ -86,7 +86,7 @@ class BatchService:
         if not product:
             raise ValueError(f"Товар с id={product_id} не найден")
         
-        received_at = datetime.utcnow()
+        received_at = datetime.now(timezone.utc)
         quantity = Decimal(str(quantity))
         
         if product.product_type == 'flower':
@@ -110,7 +110,7 @@ class BatchService:
             )
             if stock:
                 stock.quantity += quantity
-                stock.updated_at = datetime.utcnow()
+                stock.updated_at = datetime.now(timezone.utc)
             else:
                 stock = Stock(product_id=product_id, quantity=quantity)
                 db.add(stock)
@@ -131,7 +131,7 @@ class BatchService:
             )
             if stock:
                 stock.quantity += quantity
-                stock.updated_at = datetime.utcnow()
+                stock.updated_at = datetime.now(timezone.utc)
             else:
                 stock = Stock(product_id=product_id, quantity=quantity)
                 db.add(stock)
@@ -232,7 +232,7 @@ class BatchService:
         )
         if stock:
             stock.quantity -= data.quantity
-            stock.updated_at = datetime.utcnow()
+            stock.updated_at = datetime.now(timezone.utc)
         
         # Создаём запись о списании
         write_off = WriteOff(
@@ -341,37 +341,6 @@ class StockService:
         )
         result = await db.execute(stmt)
         return [StockByProduct(**row._mapping) for row in result]
-    @staticmethod
-    async def get_write_offs(
-        db: AsyncSession,
-        reason: Optional[str] = None,
-        date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None,
-        skip: int = 0,
-        limit: int = 100,
-    ) -> tuple[List['WriteOff'], int]:  # type: ignore
-        """Получает список списаний с фильтрами."""
-        from app.inventory.models import WriteOff
-        
-        stmt = select(WriteOff)
-        count_stmt = select(func.count()).select_from(WriteOff)
-        
-        if reason:
-            stmt = stmt.where(WriteOff.reason == reason)
-            count_stmt = count_stmt.where(WriteOff.reason == reason)
-        if date_from:
-            stmt = stmt.where(WriteOff.created_at >= date_from)
-            count_stmt = count_stmt.where(WriteOff.created_at >= date_from)
-        if date_to:
-            stmt = stmt.where(WriteOff.created_at <= date_to)
-            count_stmt = count_stmt.where(WriteOff.created_at <= date_to)
-        
-        total = await db.scalar(count_stmt)
-        stmt = stmt.order_by(WriteOff.created_at.desc()).offset(skip).limit(limit)
-        result = await db.execute(stmt)
-        items = list(result.scalars().all())
-        
-        return items, total or 0
 
 # ============ PURCHASE ORDERS SERVICE (Заказы поставщикам) ============
 
@@ -381,7 +350,7 @@ class PurchaseOrderService:
     @staticmethod
     def _generate_order_number() -> str:
         """Генерирует внутренний номер заказа"""
-        return f"ORD-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+        return f"ORD-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     
     @staticmethod
     async def create_order(db: AsyncSession, data, user_id: int):
@@ -512,7 +481,7 @@ class PurchaseOrderService:
                 raise ValueError("Для подтверждения заказа необходима дата счёта")
             
             # Валидация даты
-            today = datetime.utcnow().date()
+            today = datetime.now(timezone.utc).date()
             if confirm_data.invoice_date > today:
                 raise ValueError("Дата счёта не может быть позже текущего дня")
             
@@ -571,7 +540,7 @@ class PurchaseOrderService:
                         )
                         if stock:
                             stock.quantity -= voided_qty
-                            stock.updated_at = datetime.utcnow()
+                            stock.updated_at = datetime.now(timezone.utc)
                     
                     # Сбрасываем received_qty в позиции заказа
                     item.received_qty = 0
@@ -584,7 +553,7 @@ class PurchaseOrderService:
                 receipt.status = 'voided'
         
         order.status = new_status
-        order.updated_at = datetime.utcnow()
+        order.updated_at = datetime.now(timezone.utc)
         
         await db.commit()
         # Возвращаем полностью загруженный объект
@@ -618,7 +587,7 @@ class PurchaseOrderService:
             else:
                 order.payment_status = 'partial'
         
-        order.updated_at = datetime.utcnow()
+        order.updated_at = datetime.now(timezone.utc)
         await db.commit()
         return await PurchaseOrderService.get_order(db, order.id)
 
@@ -638,7 +607,7 @@ class PurchaseOrderService:
             raise ValueError("Принимать товар можно только по подтверждённому заказу")
         
         # Валидация даты накладной
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         if data.receipt_date > today:
             raise ValueError("Дата накладной не может быть позже текущего дня")
         

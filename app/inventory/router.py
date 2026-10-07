@@ -137,6 +137,60 @@ async def get_stock_by_product(
         raise HTTPException(status_code=404, detail="Stock not found for this product")
     return stock
 
+# ============ STOCK AUDIT ============
+@router.get("/stock/audit", response_model=dict)
+async def audit_stock(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Сверяет кэш inventory.stock с фактической суммой активных партий
+    (для цветов) и сравнивает по всем товарам. Возвращает расхождения.
+
+    Полезно запускать вручную при подозрении, что остатки "разъехались".
+    """
+    from app.inventory.models import Stock, Batch
+    from app.catalog.models import Product
+    from sqlalchemy import func as _func, outerjoin as _outerjoin
+
+    # Сумма активных партий по product_id
+    batch_sum_stmt = (
+        select(
+            Batch.product_id,
+            _func.coalesce(_func.sum(Batch.current_qty), 0).label("batch_sum"),
+        )
+        .where(Batch.status == "active")
+        .group_by(Batch.product_id)
+    )
+    batch_rows = (await db.execute(batch_sum_stmt)).all()
+    batch_sum = {row.product_id: float(row.batch_sum) for row in batch_rows}
+
+    # Все товары, по которым есть Stock
+    stock_rows = (await db.execute(select(Stock))).scalars().all()
+
+    discrepancies = []
+    for s in stock_rows:
+        expected = batch_sum.get(s.product_id, 0.0)
+        actual = float(s.quantity or 0)
+        # Расхождение больше 0.01 считаем значимым
+        if abs(expected - actual) > 0.01:
+            prod = await db.get(Product, s.product_id)
+            discrepancies.append({
+                "product_id": s.product_id,
+                "product_name": prod.name if prod else None,
+                "product_type": prod.product_type if prod else None,
+                "stock_quantity": actual,
+                "batches_sum": expected,
+                "diff": round(actual - expected, 2),
+            })
+
+    return {
+        "checked": len(stock_rows),
+        "discrepancies_count": len(discrepancies),
+        "discrepancies": discrepancies,
+    }
+
+
 # ============ PACKAGING UNITS ============
 
 @router.get("/capability", response_model=dict)

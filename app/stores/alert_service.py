@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Tuple
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -85,7 +85,7 @@ class AlertService:
             raise ValueError(f"Алерт уже закрыт (статус: {alert.status})")
         
         alert.status = 'resolved'
-        alert.resolved_at = datetime.utcnow()
+        alert.resolved_at = datetime.now(timezone.utc)
         alert.resolved_by = resolved_by
         
         if notes and alert.recommendations:

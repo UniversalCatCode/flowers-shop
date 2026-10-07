@@ -1,5 +1,5 @@
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -51,16 +51,6 @@ async def list_sales(
     )
     return SaleListOut(total=total, items=items)
 
-@router.get("/{sale_id}", response_model=SaleOut)
-async def get_sale(
-    sale_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    sale = await SaleService.get_by_id(db, sale_id)
-    if not sale:
-        raise HTTPException(status_code=404, detail="Sale not found")
-    return sale
 
 # ============ ОТЧЁТЫ ============
 @router.get("/reports/stock-by-batches", response_model=List[StockByBatch])
@@ -80,6 +70,17 @@ async def report_sales(
 ):
     """Возвращает детализацию продаж за период."""
     return await ReportService.get_sales_report(db, date_from, date_to)
+
+@router.get("/{sale_id}", response_model=SaleOut)
+async def get_sale(
+    sale_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    sale = await SaleService.get_by_id(db, sale_id)
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    return sale
 
 # ============ ORDER LIFECYCLE ENDPOINTS ============
 @router.get("/{sale_id}/check_resources", response_model=dict)
@@ -143,18 +144,24 @@ async def ship_order(
     current_user: User = Depends(require_permission("order.ship"))
 ):
     """Отгрузить заказ (перевод в статус shipped)"""
-    # ДОБАВЛЕНО: selectinload(Sale.items)
-    stmt = select(Sale).options(selectinload(Sale.items)).where(Sale.id == sale_id)
+    stmt = (
+        select(Sale)
+        .options(selectinload(Sale.items))
+        .where(Sale.id == sale_id)
+        .with_for_update()
+    )
     result = await db.execute(stmt)
     sale = result.scalar_one_or_none()
-    
+
     if not sale:
         raise HTTPException(status_code=404, detail="Заказ не найден")
+    if sale.status == 'shipped':
+        return sale
     if sale.status not in ('assembled', 'assembling'):
         raise HTTPException(status_code=400, detail=f"Нельзя отгрузить заказ в статусе {sale.status}")
     
     sale.status = 'shipped'
-    sale.shipped_at = datetime.utcnow()
+    sale.shipped_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(sale)
     return sale
@@ -166,18 +173,24 @@ async def complete_delivery(
     current_user: User = Depends(require_permission("order.ship"))
 ):
     """Завершить доставку (перевод в статус completed)"""
-    # ДОБАВЛЕНО: selectinload(Sale.items)
-    stmt = select(Sale).options(selectinload(Sale.items)).where(Sale.id == sale_id)
+    stmt = (
+        select(Sale)
+        .options(selectinload(Sale.items))
+        .where(Sale.id == sale_id)
+        .with_for_update()
+    )
     result = await db.execute(stmt)
     sale = result.scalar_one_or_none()
-    
+
     if not sale:
         raise HTTPException(status_code=404, detail="Заказ не найден")
+    if sale.status == 'completed':
+        return sale
     if sale.status != 'shipped':
         raise HTTPException(status_code=400, detail=f"Нельзя завершить доставку для статуса {sale.status}")
     
     sale.status = 'completed'
-    sale.completed_at = datetime.utcnow()
+    sale.completed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(sale)
     return sale
@@ -189,43 +202,68 @@ async def return_order(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("order.return"))
 ):
-    """Оформить возврат от клиента (только для статуса completed)"""
-    # ДОБАВЛЕНО: selectinload(Sale.items)
-    stmt = select(Sale).options(selectinload(Sale.items)).where(Sale.id == sale_id)
+    """Оформить возврат от клиента (только для статуса completed).
+
+    Возвращает остатки и в партии (цветы), и в Stock (все типы товаров).
+    Идемпотентно: повторный вызов на уже возвращённом заказе не делает ничего.
+    """
+    from app.inventory.models import Batch, Movement, Stock
+    from datetime import timezone
+
+    stmt = (
+        select(Sale)
+        .options(selectinload(Sale.items))
+        .where(Sale.id == sale_id)
+        .with_for_update()
+    )
     result = await db.execute(stmt)
     sale = result.scalar_one_or_none()
-    
+
     if not sale:
         raise HTTPException(status_code=404, detail="Заказ не найден")
+    if sale.status == 'returned':
+        return sale  # идемпотентно
     if sale.status != 'completed':
         raise HTTPException(status_code=400, detail="Возврат возможен только для завершённых заказов")
-    
+
     sale.status = 'returned'
-    sale.returned_at = datetime.utcnow()
+    sale.returned_at = datetime.now(timezone.utc)
     sale.return_reason = action.reason or "Возврат от клиента"
-    
-    # Возвращаем остатки
+
     for item in sale.items:
-        if item.batch_id and item.quantity > 0:
-            from app.inventory.models import Batch, Movement
+        if item.quantity <= 0:
+            continue
+
+        # 1. Возврат в партию, если она есть (цветы)
+        if item.batch_id:
             stmt_batch = select(Batch).where(Batch.id == item.batch_id)
             batch_result = await db.execute(stmt_batch)
             batch = batch_result.scalar_one_or_none()
-            
             if batch:
                 batch.current_qty += item.quantity
-                if batch.status == 'depleted':
+                if batch.status == 'exhausted':
                     batch.status = 'active'
-                
-                movement = Movement(
-                    batch_id=batch.id,
-                    movement_type='return_to_stock',
-                    quantity=item.quantity,
-                    sale_id=sale.id,
-                    created_by=current_user.id,
-                    reason=f"Возврат от клиента по заказу #{sale.id}: {sale.return_reason}"
-                )
-                db.add(movement)
+
+        # 2. Возврат в Stock (для всех типов товаров)
+        stmt_stock = select(Stock).where(Stock.product_id == item.product_id)
+        result_stock = await db.execute(stmt_stock)
+        stock_record = result_stock.scalar_one_or_none()
+        if stock_record:
+            stock_record.quantity += item.quantity
+            stock_record.updated_at = datetime.now(timezone.utc)
+        else:
+            db.add(Stock(product_id=item.product_id, quantity=item.quantity))
+
+        # 3. Движение для аудита (batch_id может быть None)
+        db.add(Movement(
+            batch_id=item.batch_id,
+            product_id=item.product_id,
+            movement_type='return_to_stock',
+            quantity=item.quantity,
+            sale_id=sale.id,
+            created_by=current_user.id,
+            reason=f"Возврат от клиента по заказу #{sale.id}: {sale.return_reason}"
+        ))
 
     await db.commit()
     await db.refresh(sale)

@@ -23,10 +23,15 @@ app = FastAPI(
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Настраиваем CORS (чтобы веб-интерфейс мог обращаться к API)
+# CORS: список origin'ов из настроек. В debug допускаем "*".
+_cors_origins = (
+    ["*"] if settings.debug and settings.cors_origins.strip() == "*"
+    else [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В production заменим на конкретный домен
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=False,  # Bearer-токены не требуют credentials
     allow_methods=["*"],
     allow_headers=["*"],
 )

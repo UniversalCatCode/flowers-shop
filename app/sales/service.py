@@ -74,69 +74,6 @@ class SaleService:
         return result.scalar_one()
 
 
-    @staticmethod
-    async def _deduct_from_batches(
-        db: AsyncSession, sale_id: int, product_id: int, required_qty: Decimal
-    ) -> Decimal:
-        """Списывает товары с партий по FIFO (сначала самые старые)."""
-        
-        stmt = (
-            select(Batch)
-            .where(
-                and_(
-                    Batch.product_id == product_id,
-                    Batch.status == 'active',
-                    Batch.current_qty > 0
-                )
-            )
-            .order_by(Batch.received_at.asc())
-        )
-        result = await db.execute(stmt)
-        batches = list(result.scalars().all())
-
-        total_cost = Decimal('0')
-        remaining_qty = required_qty
-
-        for batch in batches:
-            if remaining_qty <= 0:
-                break
-
-            deduct_qty = min(remaining_qty, batch.current_qty)
-            batch.current_qty -= deduct_qty
-            remaining_qty -= deduct_qty
-
-            batch_cost = deduct_qty * batch.purchase_price
-            total_cost += batch_cost
-
-            movement = Movement(
-                batch_id=batch.id,
-                movement_type='sale',
-                quantity=deduct_qty,
-                sale_id=sale_id,
-                reason=f'Продажа по заказу #{sale_id}',
-                created_by=None
-            )
-            db.add(movement)
-
-            if batch.current_qty == 0:
-                batch.status = 'exhausted'
-
-        if remaining_qty > 0:
-            raise ValueError(
-                f"Insufficient stock for product_id={product_id}. "
-                f"Required: {required_qty}, available: {required_qty - remaining_qty}"
-            )
-
-        stock = await db.scalar(
-            select(Stock).where(Stock.product_id == product_id)
-        )
-        if stock:
-            stock.quantity -= required_qty
-            stock.updated_at = datetime.utcnow()
-        else:
-            raise ValueError(f"Stock record not found for product_id={product_id}")
-
-        return total_cost
 
     @staticmethod
     async def get_by_id(db: AsyncSession, sale_id: int) -> Optional[Sale]:

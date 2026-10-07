@@ -3,7 +3,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog.models import Product, Recipe, RecipeItem
-from app.inventory.models import Batch
+from app.inventory.models import Batch, Stock
 
 
 
